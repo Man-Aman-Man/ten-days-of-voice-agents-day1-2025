@@ -1,4 +1,7 @@
 import logging
+import json
+from pathlib import Path
+from typing import TypedDict, Any
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -12,8 +15,8 @@ from livekit.agents import (
     cli,
     metrics,
     tokenize,
-    # function_tool,
-    # RunContext
+    function_tool,
+    RunContext,
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -23,31 +26,183 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
+# ----- Day 2: simple order state -----
+class OrderState(TypedDict, total=False):
+    drinkType: str
+    size: str
+    milk: str
+    extras: list[str]
+    name: str
+
+
+def empty_order() -> OrderState:
+    return {
+        "drinkType": "",
+        "size": "",
+        "milk": "",
+        "extras": [],
+        "name": "",
+    }
+
+
 class Assistant(Agent):
     def __init__(self) -> None:
+        # persona + behavior
         super().__init__(
-            instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions="""
+You are a friendly, efficient barista at Falcon Brew Café.
+You are talking to the customer by voice, but you will see their words as text.
+
+Your ONLY job is to take coffee orders, keep them organized, and confirm them clearly.
+
+You are working with an internal order object that has these fields:
+- drinkType (string)
+- size (string)
+- milk (string)
+- extras (list of strings, can be empty)
+- name (string, the customer's name)
+
+Use the tools provided to:
+1) Update the order whenever the user gives or changes details.
+2) Check which fields are still missing.
+3) Save the final order once all fields are filled.
+
+Conversation rules:
+- Always be warm and concise, like a real café barista.
+- Ask clarifying follow-up questions until ALL fields of the order are filled.
+- Do NOT assume missing details – ask for them.
+- When the order is complete:
+  * Call the finalize_order tool.
+  * Then give a neat, one-paragraph spoken summary of the full order
+    (mention drink type, size, milk preference, extras, and the customer's name).
+- After finishing one order, politely ask if they want to place another one.
+
+Formatting rules:
+- No emojis, no markdown, no bullet points in your replies.
+- Just natural, spoken sentences.
+""",
+        )
+        # in-memory state for the current order
+        self.current_order: OrderState = empty_order()
+
+    # helper to see if all required fields are set
+    def _order_is_complete(self) -> bool:
+        o = self.current_order
+        return bool(
+            o.get("drinkType")
+            and o.get("size")
+            and o.get("milk")
+            and o.get("name")
+        )
+        # extras can be an empty list
+
+    @function_tool
+    async def update_order_state(
+        self,
+        context: RunContext,
+        drinkType: str | None = None,
+        size: str | None = None,
+        milk: str | None = None,
+        extras: list[str] | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Update the in-progress coffee order with any details the user has given.
+
+        Use this whenever the customer mentions or changes:
+        - drink type (e.g. latte, cappuccino, cold brew)
+        - size (e.g. small, medium, large)
+        - milk preference (e.g. whole, oat, almond)
+        - extras (e.g. extra shot, vanilla syrup, less ice)
+        - their name
+
+        You can pass only the fields that changed. The tool returns the
+        full current order and whether it is complete.
+        """
+
+        logger.info("Updating order state")
+
+        if drinkType is not None:
+            self.current_order["drinkType"] = drinkType
+
+        if size is not None:
+            self.current_order["size"] = size
+
+        if milk is not None:
+            self.current_order["milk"] = milk
+
+        if extras is not None:
+            # overwrite with the new list of extras
+            self.current_order["extras"] = extras
+
+        if name is not None:
+            self.current_order["name"] = name
+
+        complete = self._order_is_complete()
+
+        return {
+            "order": self.current_order,
+            "is_complete": complete,
+        }
+
+    @function_tool
+    async def finalize_order(self, context: RunContext) -> dict[str, Any]:
+        """
+        Save the current order to a JSON file once all fields are filled.
+
+        Use this ONLY when the order is complete and ready to be placed.
+        The tool appends the order to 'orders.json' on the server and then
+        resets the internal order so a new one can be started.
+        """
+
+        logger.info("Finalizing order")
+
+        if not self._order_is_complete():
+            # let the model know it tried too early
+            return {
+                "saved": False,
+                "reason": "order_incomplete",
+                "order": self.current_order,
+            }
+
+        orders_file = Path("orders.json")
+        all_orders: list[OrderState] = []
+
+        if orders_file.exists():
+            try:
+                all_orders = json.loads(
+                    orders_file.read_text(encoding="utf-8")
+                )
+                if not isinstance(all_orders, list):
+                    all_orders = []
+            except Exception:
+                logger.exception("Failed to read existing orders.json, resetting file")
+                all_orders = []
+
+        # copy so we don't mutate what we append later
+        order_to_save: OrderState = {
+            "drinkType": self.current_order.get("drinkType", ""),
+            "size": self.current_order.get("size", ""),
+            "milk": self.current_order.get("milk", ""),
+            "extras": list(self.current_order.get("extras", [])),
+            "name": self.current_order.get("name", ""),
+        }
+
+        all_orders.append(order_to_save)
+
+        orders_file.write_text(
+            json.dumps(all_orders, indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+        # reset for next customer
+        self.current_order = empty_order()
+
+        return {
+            "saved": True,
+            "order": order_to_save,
+            "message": "Order saved to JSON file on the server.",
+        }
 
 
 def prewarm(proc: JobProcess):
@@ -56,50 +211,26 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, AssemblyAI, and the LiveKit turn detector
+    # Voice pipeline: Deepgram STT + Gemini LLM + Murf Falcon TTS
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=google.LLM(
-                model="gemini-2.5-flash",
-            ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+        llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-                voice="en-US-matthew", 
-                style="Conversation",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
-            ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
+            voice="en-US-matthew",
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+        ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
+    # Metrics collection
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -113,20 +244,11 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
-    # Start the session, which initializes the voice pipeline and warms up the models
+    # Start the session with our barista agent
     await session.start(
         agent=Assistant(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            # For telephony applications, use `BVCTelephony` for best results
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )

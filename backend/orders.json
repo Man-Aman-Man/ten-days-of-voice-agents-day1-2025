@@ -1,0 +1,39 @@
+[
+  {
+    "drinkType": "latte",
+    "size": "medium",
+    "milk": "oat",
+    "extras": [
+      "extra shot",
+      "caramel syrup"
+    ],
+    "name": "Aman"
+  },
+  {
+    "drinkType": "tea",
+    "size": "small",
+    "milk": "oat",
+    "extras": [
+      "extra sugar cubes"
+    ],
+    "name": "Aman"
+  },
+  {
+    "drinkType": "tea",
+    "size": "small",
+    "milk": "oat",
+    "extras": [
+      "extra sugar cubes"
+    ],
+    "name": "Aman"
+  },
+  {
+    "drinkType": "tea",
+    "size": "small",
+    "milk": "oat",
+    "extras": [
+      "extra sugar cubes"
+    ],
+    "name": "Disha"
+  }
+]
