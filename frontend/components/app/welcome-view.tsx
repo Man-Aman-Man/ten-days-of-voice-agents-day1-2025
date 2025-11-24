@@ -10,26 +10,27 @@ interface WelcomeViewProps {
 
 export const WelcomeView = ({ startButtonText, onStartCall }: WelcomeViewProps) => {
   return (
-    <div className="flex min-h-[calc(100vh-80px)] flex-col items-center justify-center px-6 py-10 bg-[#0F1714] bg-gradient-to-br from-[#0F1714] via-[#143A2D] to-black text-[#F5F0E6]">
+    <div className="flex min-h-[calc(100vh-80px)] flex-col items-center justify-center px-8 py-10 bg-[#F6F7FB] bg-gradient-to-br from-[#B4F288] via-[#E4ECF4] to-[#88F2E6] text-[#10212B]">
       <div className="max-w-xl text-center space-y-6">
-        <p className="text-xs tracking-[0.3em] uppercase text-[#C59D5F]/80">
-          BLUE TOKAI · MURF FALCON
+        <p className="text-xs tracking-[0.3em] uppercase text-[#4B6A88]/80">
+          SteadyMind · Daily Check-In
         </p>
 
         <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-          Your Blue Tokai AI Barista
+          Your Everyday Wellness Voice Companion
         </h1>
 
-        <p className="text-sm md:text-base text-[#F5F0E6]/80">
-          Welcome to your virtual Blue Tokai café, powered by the fastest TTS API, Murf Falcon.
-          Just talk to place your coffee order by voice, and I will ask follow-up questions,
-          confirm every detail, and save your order.
+        <p className="text-sm md:text-base text-[#10212B]/75">
+          I am a calm, grounded companion that checks in with you about your mood, energy
+          and simple goals for the day. I&apos;m not a doctor or therapist; I just help you
+          reflect, set small intentions, and remember how things have been going over time.
         </p>
 
-        <div className="rounded-xl border border-[#C59D5F]/30 bg-black/30 px-4 py-3 text-xs md:text-sm text-left text-[#F5F0E6]/80">
+        <div className="rounded-xl border border-[#4B6A88]/20 bg-white/80 px-4 py-3 text-xs md:text-sm text-left text-[#10212B]/80 shadow-sm">
           Try saying:
           <br />
-          “I&apos;d like a medium latte with oat milk and an extra shot. My name is Aman.”
+          “I’m feeling a bit overwhelmed but I want to finish two tasks and take a break.
+          How should I plan my day?”
         </div>
 
         <div className="pt-2">
@@ -37,14 +38,14 @@ export const WelcomeView = ({ startButtonText, onStartCall }: WelcomeViewProps) 
             variant="primary"
             size="lg"
             onClick={onStartCall}
-            className="mt-3 w-64 rounded-full font-mono bg-[#C59D5F] text-black hover:bg-[#d2ad6a]"
+            className="mt-3 w-72 rounded-full font-medium bg-[#4B6A88] text-white hover:bg-[#3b556d]"
           >
-            {startButtonText || "Start order with AI Barista"}
+            {startButtonText || "Start today’s wellness check-in"}
           </Button>
         </div>
 
-        <p className="text-[11px] text-[#F5F0E6]/50">
-          Built for the Murf AI Voice Agent Challenge · #MurfAIVoiceAgentsChallenge
+        <p className="text-[11px] text-[#10212B]/55">
+          Built for the Murf AI Voice Agent Challenge · Powered by Murf Falcon TTS
         </p>
       </div>
     </div>

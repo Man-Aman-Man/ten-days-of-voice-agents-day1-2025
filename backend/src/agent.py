@@ -1,7 +1,8 @@
 import logging
 import json
 from pathlib import Path
-from typing import TypedDict, Any
+from datetime import datetime, timezone
+from typing import TypedDict, Any, List, Optional
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -26,183 +27,177 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
-# ----- Day 2: simple order state -----
-class OrderState(TypedDict, total=False):
-    drinkType: str
-    size: str
-    milk: str
-    extras: list[str]
-    name: str
-
-
-def empty_order() -> OrderState:
-    return {
-        "drinkType": "",
-        "size": "",
-        "milk": "",
-        "extras": [],
-        "name": "",
-    }
+# --------- Day 3: wellness log data types ---------
+class WellnessEntry(TypedDict, total=False):
+    timestamp: str
+    mood: str
+    energy: str
+    stressors: str
+    objectives: List[str]
+    self_care: List[str]
+    summary: str
 
 
 class Assistant(Agent):
     def __init__(self) -> None:
-        # persona + behavior
         super().__init__(
             instructions="""
-You are a friendly, efficient barista at Falcon Brew Café.
-You are talking to the customer by voice, but you will see their words as text.
+You are a calm, supportive, and grounded health & wellness companion.
+You are not a doctor, therapist, or clinician. You never diagnose, never
+name medical or mental health conditions, and never give medical advice.
 
-Your ONLY job is to take coffee orders, keep them organized, and confirm them clearly.
+Your main job is to run a short daily check-in with the user and help
+them reflect on how they feel and what they want to get done today.
 
-You are working with an internal order object that has these fields:
-- drinkType (string)
-- size (string)
-- milk (string)
-- extras (list of strings, can be empty)
-- name (string, the customer's name)
+CONVERSATION FLOW:
+1) Start every session gently, and if possible, call the tool
+   `load_wellness_history` once to see recent check-ins.
+   Use this history to reference one small, relevant detail
+   from the past (for example:
+   "Last time you mentioned low energy. How does today compare?").
 
-Use the tools provided to:
-1) Update the order whenever the user gives or changes details.
-2) Check which fields are still missing.
-3) Save the final order once all fields are filled.
+2) Ask about:
+   - Mood (how they feel in their own words, or simple scale like "low/ok/high")
+   - Energy levels
+   - Any stressors or things weighing on their mind
 
-Conversation rules:
-- Always be warm and concise, like a real café barista.
-- Ask clarifying follow-up questions until ALL fields of the order are filled.
-- Do NOT assume missing details – ask for them.
-- When the order is complete:
-  * Call the finalize_order tool.
-  * Then give a neat, one-paragraph spoken summary of the full order
-    (mention drink type, size, milk preference, extras, and the customer's name).
-- After finishing one order, politely ask if they want to place another one.
+3) Ask about intentions / objectives for today:
+   - 1–3 practical goals (study, work, chores, etc.)
+   - Optional self-care intentions (rest, walk, exercise, hobbies, breaks)
 
-Formatting rules:
-- No emojis, no markdown, no bullet points in your replies.
-- Just natural, spoken sentences.
-""",
+4) Offer only small, realistic, and non-medical suggestions, such as:
+   - Break large tasks into smaller steps.
+   - Take short breaks between tasks.
+   - Go for a brief walk or stretch.
+   - Do simple grounding activities like deep breathing for a minute.
+   Never claim to treat anything, never say you are giving professional advice.
+
+5) As you move through the check-in, plan a short summary in your mind:
+   - Mood and energy in simple words
+   - Main 1–3 objectives
+   - Any self-care idea they mentioned or you suggested
+
+6) When the check-in feels complete:
+   - Call the tool `save_wellness_checkin` exactly once, passing:
+     * their mood description
+     * their energy description
+     * a short sentence about stressors
+     * the list of objectives
+     * the list of any self-care actions (can be empty)
+     * a short one-sentence summary from your perspective
+   - After the tool runs, tell the user a brief recap and ask:
+     "Does this sound right?"
+
+7) Keep the check-in short and focused. If they want to talk more,
+   you can respond, but always stay supportive, practical, and grounded.
+
+SAFETY AND LIMITS:
+- Do not mention diseases, disorders, or diagnoses.
+- If the user sounds very distressed, or mentions self-harm,
+  tell them kindly that you are not a professional and they should
+  reach out to a trusted person or local emergency / helpline.
+- Do not give medication, treatment, or crisis instructions.
+
+FORMATTING:
+- Speak in simple, natural sentences, as if talking out loud.
+- No emojis, no markdown, no bullet points.
+"""
         )
-        # in-memory state for the current order
-        self.current_order: OrderState = empty_order()
 
-    # helper to see if all required fields are set
-    def _order_is_complete(self) -> bool:
-        o = self.current_order
-        return bool(
-            o.get("drinkType")
-            and o.get("size")
-            and o.get("milk")
-            and o.get("name")
-        )
-        # extras can be an empty list
+        self.history_file = Path("wellness_log.json")
 
-    @function_tool
-    async def update_order_state(
-        self,
-        context: RunContext,
-        drinkType: str | None = None,
-        size: str | None = None,
-        milk: str | None = None,
-        extras: list[str] | None = None,
-        name: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Update the in-progress coffee order with any details the user has given.
+    # internal helper: read whole file
+    def _read_history(self) -> List[WellnessEntry]:
+        if not self.history_file.exists():
+            return []
+        try:
+            data = json.loads(self.history_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data  # type: ignore[return-value]
+            return []
+        except Exception:
+            logger.exception("Failed to read wellness_log.json, treating as empty")
+            return []
 
-        Use this whenever the customer mentions or changes:
-        - drink type (e.g. latte, cappuccino, cold brew)
-        - size (e.g. small, medium, large)
-        - milk preference (e.g. whole, oat, almond)
-        - extras (e.g. extra shot, vanilla syrup, less ice)
-        - their name
-
-        You can pass only the fields that changed. The tool returns the
-        full current order and whether it is complete.
-        """
-
-        logger.info("Updating order state")
-
-        if drinkType is not None:
-            self.current_order["drinkType"] = drinkType
-
-        if size is not None:
-            self.current_order["size"] = size
-
-        if milk is not None:
-            self.current_order["milk"] = milk
-
-        if extras is not None:
-            # overwrite with the new list of extras
-            self.current_order["extras"] = extras
-
-        if name is not None:
-            self.current_order["name"] = name
-
-        complete = self._order_is_complete()
-
-        return {
-            "order": self.current_order,
-            "is_complete": complete,
-        }
-
-    @function_tool
-    async def finalize_order(self, context: RunContext) -> dict[str, Any]:
-        """
-        Save the current order to a JSON file once all fields are filled.
-
-        Use this ONLY when the order is complete and ready to be placed.
-        The tool appends the order to 'orders.json' on the server and then
-        resets the internal order so a new one can be started.
-        """
-
-        logger.info("Finalizing order")
-
-        if not self._order_is_complete():
-            # let the model know it tried too early
-            return {
-                "saved": False,
-                "reason": "order_incomplete",
-                "order": self.current_order,
-            }
-
-        orders_file = Path("orders.json")
-        all_orders: list[OrderState] = []
-
-        if orders_file.exists():
-            try:
-                all_orders = json.loads(
-                    orders_file.read_text(encoding="utf-8")
-                )
-                if not isinstance(all_orders, list):
-                    all_orders = []
-            except Exception:
-                logger.exception("Failed to read existing orders.json, resetting file")
-                all_orders = []
-
-        # copy so we don't mutate what we append later
-        order_to_save: OrderState = {
-            "drinkType": self.current_order.get("drinkType", ""),
-            "size": self.current_order.get("size", ""),
-            "milk": self.current_order.get("milk", ""),
-            "extras": list(self.current_order.get("extras", [])),
-            "name": self.current_order.get("name", ""),
-        }
-
-        all_orders.append(order_to_save)
-
-        orders_file.write_text(
-            json.dumps(all_orders, indent=2, ensure_ascii=False),
+    # internal helper: write whole file
+    def _write_history(self, entries: List[WellnessEntry]) -> None:
+        self.history_file.write_text(
+            json.dumps(entries, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
-        # reset for next customer
-        self.current_order = empty_order()
+    @function_tool
+    async def load_wellness_history(
+        self,
+        context: RunContext,
+        max_entries: int = 5,
+    ) -> dict[str, Any]:
+        """
+        Load the most recent wellness check-ins from the JSON log.
 
-        return {
-            "saved": True,
-            "order": order_to_save,
-            "message": "Order saved to JSON file on the server.",
+        Use this near the beginning of the conversation to:
+        - Gently reference how the user was feeling last time.
+        - Notice simple patterns in mood, energy, or goals.
+
+        Args:
+            max_entries: maximum number of latest entries to return.
+
+        Returns:
+            A dictionary with a list of entries ordered from oldest to newest.
+        """
+
+        all_entries = self._read_history()
+        if not all_entries:
+            return {"entries": [], "has_history": False}
+
+        # keep only last max_entries, but in chronological order
+        sliced = all_entries[-max_entries:]
+        return {"entries": sliced, "has_history": True}
+
+    @function_tool
+    async def save_wellness_checkin(
+        self,
+        context: RunContext,
+        mood: str,
+        energy: str,
+        stressors: str,
+        objectives: List[str],
+        self_care: Optional[List[str]] = None,
+        summary: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Save today's wellness check-in to the JSON log.
+
+        Call this once the check-in feels complete and you have:
+        - A short description of mood
+        - A short description of energy
+        - A short phrase about stressors (or "none" if they say nothing)
+        - One or more simple objectives for today
+        - Optional self-care actions they want to try
+        - A brief summary sentence from your point of view
+
+        The tool appends a new entry to 'wellness_log.json' and
+        returns the saved entry.
+        """
+
+        logger.info("Saving wellness check-in")
+
+        all_entries = self._read_history()
+
+        entry: WellnessEntry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mood": mood.strip(),
+            "energy": energy.strip(),
+            "stressors": stressors.strip(),
+            "objectives": [o.strip() for o in objectives if o.strip()],
+            "self_care": [s.strip() for s in (self_care or []) if s.strip()],
+            "summary": (summary or "").strip(),
         }
+
+        all_entries.append(entry)
+        self._write_history(all_entries)
+
+        return {"saved": True, "entry": entry, "total_entries": len(all_entries)}
 
 
 def prewarm(proc: JobProcess):
@@ -244,7 +239,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # Start the session with our barista agent
+    # Start the session with the wellness companion
     await session.start(
         agent=Assistant(),
         room=ctx.room,
