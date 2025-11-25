@@ -1,8 +1,7 @@
 import logging
+import os
 import json
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import TypedDict, Any, List, Optional
+from typing import Optional, Dict, Any, List
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -23,181 +22,207 @@ from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
-
 load_dotenv(".env.local")
 
-
-# --------- Day 3: wellness log data types ---------
-class WellnessEntry(TypedDict, total=False):
-    timestamp: str
-    mood: str
-    energy: str
-    stressors: str
-    objectives: List[str]
-    self_care: List[str]
-    summary: str
+# Path for Day 4 content (as per challenge docs)
+CONTENT_PATH = os.path.join(os.getcwd(), "shared-data", "day4_tutor_content.json")
 
 
-class Assistant(Agent):
+# ---------- Dynamic Murf Wrapper (runtime voice switching) ----------
+
+class DynamicMurf:
+    """
+    Simple wrapper around murf.TTS that allows switching the voice at runtime.
+
+    It holds an internal murf.TTS instance and recreates it whenever set_voice()
+    is called. LiveKit only sees this wrapper as the TTS implementation.
+    """
+
+    def __init__(self, voice: str, **kwargs: Any):
+        self._kwargs = dict(kwargs)
+        self._voice = voice
+        self._impl = murf.TTS(voice=voice, **self._kwargs)
+
+    def set_voice(self, voice: str):
+        """Switch to a new Murf voice by recreating the underlying TTS."""
+        if voice == self._voice:
+            return
+        logger.info(f"DynamicMurf switching voice from {self._voice} to {voice}")
+        self._voice = voice
+        self._impl = murf.TTS(voice=voice, **self._kwargs)
+
+    def __getattr__(self, item: str):
+        # Delegate all other attribute/method access to the internal TTS instance
+        return getattr(self._impl, item)
+
+
+# ---------- Tutor Agent ----------
+
+class TutorAgent(Agent):
+    """
+    Teach-the-Tutor active recall coach with 3 modes:
+      - learn: explain concept
+      - quiz: ask questions
+      - teach_back: user explains, agent gives feedback
+    """
+
     def __init__(self) -> None:
         super().__init__(
             instructions="""
-You are a calm, supportive, and grounded health & wellness companion.
-You are not a doctor, therapist, or clinician. You never diagnose, never
-name medical or mental health conditions, and never give medical advice.
+You are an active recall tutor with three modes:
 
-Your main job is to run a short daily check-in with the user and help
-them reflect on how they feel and what they want to get done today.
+- learn: you explain a concept in simple, clear language.
+- quiz: you ask short questions about the concept and respond to the user's answers.
+- teach_back: you ask the user to explain the concept back and give simple qualitative feedback.
 
-CONVERSATION FLOW:
-1) Start every session gently, and if possible, call the tool
-   `load_wellness_history` once to see recent check-ins.
-   Use this history to reference one small, relevant detail
-   from the past (for example:
-   "Last time you mentioned low energy. How does today compare?").
+RULES:
+- Do not use emojis or fancy formatting. Speak as if talking out loud.
+- Keep responses short and focused.
+- You have access to tools: list_concepts, set_mode, choose_concept, explain_concept,
+  ask_quiz_question, evaluate_teach_back.
+- At the start of the conversation:
+  1) Call list_concepts to see available topics.
+  2) Ask the user which mode they want (learn / quiz / teach_back).
+  3) Call set_mode with that mode.
+  4) Ask which concept to study and call choose_concept.
+- When the user asks to switch modes later, call set_mode again.
 
-2) Ask about:
-   - Mood (how they feel in their own words, or simple scale like "low/ok/high")
-   - Energy levels
-   - Any stressors or things weighing on their mind
-
-3) Ask about intentions / objectives for today:
-   - 1–3 practical goals (study, work, chores, etc.)
-   - Optional self-care intentions (rest, walk, exercise, hobbies, breaks)
-
-4) Offer only small, realistic, and non-medical suggestions, such as:
-   - Break large tasks into smaller steps.
-   - Take short breaks between tasks.
-   - Go for a brief walk or stretch.
-   - Do simple grounding activities like deep breathing for a minute.
-   Never claim to treat anything, never say you are giving professional advice.
-
-5) As you move through the check-in, plan a short summary in your mind:
-   - Mood and energy in simple words
-   - Main 1–3 objectives
-   - Any self-care idea they mentioned or you suggested
-
-6) When the check-in feels complete:
-   - Call the tool `save_wellness_checkin` exactly once, passing:
-     * their mood description
-     * their energy description
-     * a short sentence about stressors
-     * the list of objectives
-     * the list of any self-care actions (can be empty)
-     * a short one-sentence summary from your perspective
-   - After the tool runs, tell the user a brief recap and ask:
-     "Does this sound right?"
-
-7) Keep the check-in short and focused. If they want to talk more,
-   you can respond, but always stay supportive, practical, and grounded.
-
-SAFETY AND LIMITS:
-- Do not mention diseases, disorders, or diagnoses.
-- If the user sounds very distressed, or mentions self-harm,
-  tell them kindly that you are not a professional and they should
-  reach out to a trusted person or local emergency / helpline.
-- Do not give medication, treatment, or crisis instructions.
-
-FORMATTING:
-- Speak in simple, natural sentences, as if talking out loud.
-- No emojis, no markdown, no bullet points.
-"""
+IMPORTANT:
+- The system will switch your voice when you call set_mode:
+  * learn -> Matthew
+  * quiz -> Alicia
+  * teach_back -> Ken
+You do NOT need to mention voice names, just focus on teaching.
+""".strip()
         )
 
-        self.history_file = Path("wellness_log.json")
+        self.mode: Optional[str] = None  # "learn" | "quiz" | "teach_back"
+        self.current_concept_id: Optional[str] = None
+        self.content: Dict[str, Dict[str, Any]] = self._load_content()
 
-    # internal helper: read whole file
-    def _read_history(self) -> List[WellnessEntry]:
-        if not self.history_file.exists():
-            return []
-        try:
-            data = json.loads(self.history_file.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                return data  # type: ignore[return-value]
-            return []
-        except Exception:
-            logger.exception("Failed to read wellness_log.json, treating as empty")
-            return []
+    def _load_content(self) -> Dict[str, Dict[str, Any]]:
+        """Load concepts from JSON; fall back to a small set if file missing."""
+        if os.path.exists(CONTENT_PATH):
+            try:
+                raw = json.loads(open(CONTENT_PATH, encoding="utf-8").read())
+                if isinstance(raw, list):
+                    return {c["id"]: c for c in raw}
+            except Exception:
+                logger.exception("Failed to load day4_tutor_content.json, using fallback content")
 
-    # internal helper: write whole file
-    def _write_history(self, entries: List[WellnessEntry]) -> None:
-        self.history_file.write_text(
-            json.dumps(entries, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    @function_tool
-    async def load_wellness_history(
-        self,
-        context: RunContext,
-        max_entries: int = 5,
-    ) -> dict[str, Any]:
-        """
-        Load the most recent wellness check-ins from the JSON log.
-
-        Use this near the beginning of the conversation to:
-        - Gently reference how the user was feeling last time.
-        - Notice simple patterns in mood, energy, or goals.
-
-        Args:
-            max_entries: maximum number of latest entries to return.
-
-        Returns:
-            A dictionary with a list of entries ordered from oldest to newest.
-        """
-
-        all_entries = self._read_history()
-        if not all_entries:
-            return {"entries": [], "has_history": False}
-
-        # keep only last max_entries, but in chronological order
-        sliced = all_entries[-max_entries:]
-        return {"entries": sliced, "has_history": True}
-
-    @function_tool
-    async def save_wellness_checkin(
-        self,
-        context: RunContext,
-        mood: str,
-        energy: str,
-        stressors: str,
-        objectives: List[str],
-        self_care: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """
-        Save today's wellness check-in to the JSON log.
-
-        Call this once the check-in feels complete and you have:
-        - A short description of mood
-        - A short description of energy
-        - A short phrase about stressors (or "none" if they say nothing)
-        - One or more simple objectives for today
-        - Optional self-care actions they want to try
-        - A brief summary sentence from your point of view
-
-        The tool appends a new entry to 'wellness_log.json' and
-        returns the saved entry.
-        """
-
-        logger.info("Saving wellness check-in")
-
-        all_entries = self._read_history()
-
-        entry: WellnessEntry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "mood": mood.strip(),
-            "energy": energy.strip(),
-            "stressors": stressors.strip(),
-            "objectives": [o.strip() for o in objectives if o.strip()],
-            "self_care": [s.strip() for s in (self_care or []) if s.strip()],
-            "summary": (summary or "").strip(),
+        # Fallback content if file missing or invalid
+        return {
+            "variables": {
+                "id": "variables",
+                "title": "Variables",
+                "summary": "Variables store values so you can reuse and change them later in a program.",
+                "sample_question": "What is a variable in programming and why is it useful?",
+            },
+            "loops": {
+                "id": "loops",
+                "title": "Loops",
+                "summary": "Loops let you repeat actions multiple times without writing the same code again.",
+                "sample_question": "Explain the difference between a for loop and a while loop.",
+            },
         }
 
-        all_entries.append(entry)
-        self._write_history(all_entries)
+    # ---------- Tools ----------
 
-        return {"saved": True, "entry": entry, "total_entries": len(all_entries)}
+    @function_tool
+    async def list_concepts(self, context: RunContext) -> List[Dict[str, str]]:
+        """List available concepts with id and title."""
+        return [{"id": c["id"], "title": c["title"]} for c in self.content.values()]
+
+    @function_tool
+    async def set_mode(self, context: RunContext, mode: str) -> str:
+        """
+        Set the tutor mode.
+
+        Modes:
+          - learn
+          - quiz
+          - teach_back
+
+        This also switches the Murf voice via the DynamicMurf wrapper.
+        """
+        normalized = (mode or "").strip().lower()
+        if normalized not in {"learn", "quiz", "teach_back"}:
+            return "Unknown mode. Please choose 'learn', 'quiz', or 'teach_back'."
+
+        self.mode = normalized
+
+        # Map mode -> Murf voice id (string)
+        voice = "en-US-matthew"
+        if normalized == "quiz":
+            voice = "en-US-alicia"
+        elif normalized == "teach_back":
+            voice = "en-US-ken"
+
+        # Try to switch the runtime TTS voice
+        try:
+            session = getattr(context, "session", None)
+            if session is not None:
+                tts = getattr(session, "tts", None)
+                if hasattr(tts, "set_voice"):
+                    tts.set_voice(voice)
+                elif tts is not None:
+                    # Best-effort fallback: set attribute directly if supported
+                    setattr(tts, "voice", voice)
+            logger.info(f"Mode set to {normalized}, voice={voice}")
+        except Exception:
+            logger.exception("Failed to switch Murf voice for mode=%s", normalized)
+
+        return f"Mode set to {normalized}."
+
+    @function_tool
+    async def choose_concept(self, context: RunContext, concept_id: str) -> str:
+        """Choose a concept by id (e.g. 'variables', 'loops')."""
+        cid = (concept_id or "").strip().lower()
+        if cid not in self.content:
+            return f"I could not find a concept named '{concept_id}'."
+        self.current_concept_id = cid
+        title = self.content[cid]["title"]
+        return f"Great, we will work on {title}."
+
+    @function_tool
+    async def explain_concept(self, context: RunContext) -> str:
+        """Return the summary text for the current concept (for learn mode)."""
+        if not self.current_concept_id:
+            return "Please choose a concept first."
+        summary = self.content[self.current_concept_id]["summary"]
+        return summary
+
+    @function_tool
+    async def ask_quiz_question(self, context: RunContext) -> str:
+        """Return a sample quiz question for the current concept (for quiz mode)."""
+        if not self.current_concept_id:
+            return "Please choose a concept first."
+        question = self.content[self.current_concept_id]["sample_question"]
+        return question
+
+    @function_tool
+    async def evaluate_teach_back(self, context: RunContext, user_explanation: str) -> str:
+        """
+        Give simple qualitative feedback on the user's explanation in teach_back mode.
+        Uses rough keyword overlap against the concept summary.
+        """
+        if not self.current_concept_id:
+            return "Please choose a concept first."
+
+        summary = self.content[self.current_concept_id]["summary"].lower()
+        response = (user_explanation or "").lower()
+
+        # Very simple keyword overlap heuristic
+        summary_words = set(summary.split())
+        resp_words = set(response.split())
+        overlap = len(summary_words & resp_words) / max(1, len(summary_words))
+
+        if overlap >= 0.6:
+            return "Nice job explaining that. You captured the main ideas."
+        elif overlap >= 0.3:
+            return "Good start. You mentioned some key points. Try adding why it is useful or an example."
+        else:
+            return "Thanks for explaining. I think you can add more of the core ideas. Try including what it does and why it matters."
 
 
 def prewarm(proc: JobProcess):
@@ -206,17 +231,17 @@ def prewarm(proc: JobProcess):
 
 async def entrypoint(ctx: JobContext):
     # Logging setup
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
+    ctx.log_context_fields = {"room": ctx.room.name}
 
-    # Voice pipeline: Deepgram STT + Gemini LLM + Murf Falcon TTS
+    # Create the tutor agent
+    agent = TutorAgent()
+
+    # Set up a voice AI pipeline with DynamicMurf for runtime switching
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(
-            voice="en-US-matthew",
-            style="Conversation",
+        tts=DynamicMurf(
+            voice="en-US-matthew",  # default voice (learn mode)
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True,
         ),
@@ -225,11 +250,10 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    # Metrics collection
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
+    def _on_metrics(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
@@ -239,16 +263,16 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(log_usage)
 
-    # Start the session with the wellness companion
+    # Start the session
     await session.start(
-        agent=Assistant(),
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
 
-    # Join the room and connect to the user
+    # Connect to the user
     await ctx.connect()
 
 

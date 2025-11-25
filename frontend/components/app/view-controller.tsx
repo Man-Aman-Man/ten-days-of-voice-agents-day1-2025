@@ -12,12 +12,8 @@ const MotionSessionView = motion.create(SessionView);
 
 const VIEW_MOTION_PROPS = {
   variants: {
-    visible: {
-      opacity: 1,
-    },
-    hidden: {
-      opacity: 0,
-    },
+    visible: { opacity: 1 },
+    hidden: { opacity: 0 },
   },
   initial: 'hidden',
   animate: 'visible',
@@ -33,10 +29,8 @@ export function ViewController() {
   const isSessionActiveRef = useRef(false);
   const { appConfig, isSessionActive, startSession } = useSession();
 
-  // animation handler holds a reference to stale isSessionActive value
   isSessionActiveRef.current = isSessionActive;
 
-  // disconnect room after animation completes
   const handleAnimationComplete = () => {
     if (!isSessionActiveRef.current && room.state !== 'disconnected') {
       room.disconnect();
@@ -45,16 +39,17 @@ export function ViewController() {
 
   return (
     <AnimatePresence mode="wait">
-      {/* Welcome screen */}
+      
+      {/* Welcome Screen */}
       {!isSessionActive && (
         <MotionWelcomeView
           key="welcome"
           {...VIEW_MOTION_PROPS}
-          startButtonText={appConfig.startButtonText}
-          onStartCall={startSession}
+          onStartCall={() => startSession()} 
         />
       )}
-      {/* Session view */}
+
+      {/* Active AI Session View */}
       {isSessionActive && (
         <MotionSessionView
           key="session-view"
@@ -63,6 +58,7 @@ export function ViewController() {
           onAnimationComplete={handleAnimationComplete}
         />
       )}
+
     </AnimatePresence>
   );
 }
