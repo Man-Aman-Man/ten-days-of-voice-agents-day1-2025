@@ -116,13 +116,13 @@ You do NOT need to mention voice names, just focus on teaching.
                 "id": "variables",
                 "title": "Variables",
                 "summary": "Variables store values so you can reuse and change them later in a program.",
-                "sample_question": "What is a variable in programming and why is it useful?",
+                "sample_questions": "What is a variable in programming and why is it useful?",
             },
             "loops": {
                 "id": "loops",
                 "title": "Loops",
                 "summary": "Loops let you repeat actions multiple times without writing the same code again.",
-                "sample_question": "Explain the difference between a for loop and a while loop.",
+                "sample_questions": "Explain the difference between a for loop and a while loop.",
             },
         }
 
@@ -197,7 +197,7 @@ You do NOT need to mention voice names, just focus on teaching.
         """Return a sample quiz question for the current concept (for quiz mode)."""
         if not self.current_concept_id:
             return "Please choose a concept first."
-        question = self.content[self.current_concept_id]["sample_question"]
+        question = self.content[self.current_concept_id]["sample_questions"]
         return question
 
     @function_tool
