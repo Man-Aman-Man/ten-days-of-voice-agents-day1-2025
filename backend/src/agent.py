@@ -1,4 +1,3 @@
-# backend/src/agent.py
 import logging
 import os
 import json
@@ -27,188 +26,218 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
-FAQ_PATH = os.path.join(BASE_DIR, "shared_data", "day5_freshworks_faq.json")
-LEADS_DIR = os.path.join(BASE_DIR, "leads")
-LEADS_FILE = os.path.join(LEADS_DIR, "freshworks_leads.json")
+FRAUD_DB_PATH = os.path.join(BASE_DIR, "shared_data", "day6_fraud_cases.json")
 
 
-# ---------- helper functions ----------
-def _load_json(path: str):
+def load_db() -> List[Dict[str, Any]]:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(FRAUD_DB_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        return []
     except Exception:
-        return None
+        logger.exception("Failed to read fraud DB")
+        return []
 
 
-def _append_lead(record: Dict[str, Any]):
-    os.makedirs(LEADS_DIR, exist_ok=True)
-    data = []
-    if os.path.exists(LEADS_FILE):
-        try:
-            data = json.load(open(LEADS_FILE, encoding="utf-8"))
-            if not isinstance(data, list):
-                data = []
-        except Exception:
-            data = []
-    data.append(record)
-    tmp = LEADS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, LEADS_FILE)
+def save_db(cases: List[Dict[str, Any]]) -> None:
+    try:
+        tmp = FRAUD_DB_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cases, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, FRAUD_DB_PATH)
+    except Exception:
+        logger.exception("Failed to write fraud DB")
 
 
-# ---------- Simple FAQ search ----------
-def find_faq_answer(faq_list: List[Dict[str, Any]], question_text: str) -> Optional[Dict[str, Any]]:
-    q = (question_text or "").lower()
-    # simple keyword match: find FAQ with the highest overlap of words
-    best = None
-    best_score = 0
-    qwords = set(w for w in q.split() if len(w) > 3)
-    for item in faq_list:
-        txt = (item.get("question", "") + " " + item.get("answer", "")).lower()
-        twords = set(w for w in txt.split() if len(w) > 3)
-        score = len(qwords & twords)
-        if score > best_score:
-            best_score = score
-            best = item
-    # threshold: require at least 1 overlapping word
-    return best if best_score > 0 else None
+class FraudAgent(Agent):
+    """
+    Fraud alert voice agent for a fictional bank.
 
+    Flow:
+    - Load fraud cases.
+    - Ask for user's first name.
+    - Match to a case with status pending_review.
+    - Ask a basic security question from DB (non-sensitive).
+    - If verified -> read suspicious transaction.
+    - Ask if customer made it (yes/no).
+    - Update status: confirmed_safe / confirmed_fraud / verification_failed.
+    - Save back to DB with outcome note.
+    """
 
-# ---------- Agent ----------
-class SDRAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
-You are an SDR for Freshworks. Greet visitors warmly and ask what brought them here.
-Focus on understanding their needs. Use the provided FAQ content to answer product/pricing questions and do NOT invent details not in the FAQ.
-Collect lead fields: name, company, email, role, use_case, team_size, timeline.
-Speak naturally and be concise. When the user indicates they are done (for example: "that's all", "thanks", "I'm done"), call the tool `finalize_call` with the user's last message. If the tool reports `need_email`, ask the user for their email, gather it via `gather_lead_field`, then call `finalize_call` again to save and close.
-Speak Politely and Professionally at all times.
+You are a calm, professional fraud detection representative for a fictional bank called "SafeBank".
 
+Your job in each call is:
+- Introduce yourself and SafeBank's fraud department.
+- Explain that you are calling about a suspicious transaction on the customer's card.
+- Use only safe, non-sensitive verification (for example, a simple security question provided to you).
+- NEVER ask for full card number, PIN, passwords, or one-time passwords.
+- Keep language reassuring, clear, and concise.
+
+CALL FLOW YOU SHOULD FOLLOW:
+
+1) At the start of the conversation:
+   - Greet the customer.
+   - Tell them you are from SafeBank fraud department.
+   - Briefly explain that you want to verify a recent potentially suspicious transaction.
+   - Ask for the customer's first name so you can look up their case.
+   - Use the tool 'select_case_for_user' with the given name.
+   - If no matching case is found, explain that you don't see an active fraud alert and politely end the call.
+
+2) If a case is found:
+   - Tell the customer you will ask a simple security question.
+   - Use the tool 'get_security_question' to retrieve a safe security question.
+   - Ask that question exactly or in very similar words.
+   - When the user answers, call the tool 'verify_security_answer' with their answer.
+   - If verification fails, explain that you cannot continue and call 'mark_case_status' with 'verification_failed'.
+
+3) If verification succeeds:
+   - Use the tool 'get_transaction_details' to get a short description of the suspicious transaction:
+     merchant, amount, masked card ending, date/time, and location.
+   - Read out those details slowly and clearly.
+   - Ask: "Did you make this transaction?" and listen to a yes/no style answer.
+
+4) Once the user answers yes/no:
+   - If they clearly confirm the transaction is legitimate, call 'mark_case_status' with 'confirmed_safe'.
+   - If they clearly deny the transaction, call 'mark_case_status' with 'confirmed_fraud'.
+
+5) After updating the case:
+   - Give a short verbal summary of what you did:
+     - For confirmed_safe: mention that no further action is required.
+     - For confirmed_fraud: mention that the card will be blocked and a dispute will be raised (all mock/demo).
+   - Thank the customer and end the call.
+
+Throughout the call:
+- Stay calm and friendly.
+- Do not improvise details about the bank's systems beyond: blocking card, raising dispute, monitoring account (all as part of the demo).
+- Use the tools I provided to you to read and update the fraud case. Do not invent your own database.
 """.strip()
         )
-        self.faq: List[Dict[str, Any]] = []
-        self.lead: Dict[str, Any] = {}
-        # default lead collection fields and friendly prompts
-        self.lead_schema = {
-            "name": "Can I have your full name, please?",
-            "company": "What company do you work at?",
-            "role": "What's your role there?",
-            "use_case": "What would you like to use Freshworks for?",
-            "team_size": "How big is your team?",
-            "timeline": "What's your expected timeline to start? (now / soon / later)",
-            "email": "What's the best email to reach you at?"
-        }
 
-    # ---------- Tools ----------
-    @function_tool
-    async def load_faq(self, context: RunContext) -> Dict[str, Any]:
-        """Load FAQ content from shared_data and return basic metadata."""
-        faq = _load_json(FAQ_PATH)
-        if not isinstance(faq, list):
-            self.faq = []
-            return {"ok": False, "message": "FAQ not found or invalid"}
-        self.faq = faq
-        return {"ok": True, "count": len(faq)}
+        self.cases: List[Dict[str, Any]] = []
+        self.active_case: Optional[Dict[str, Any]] = None
 
-    @function_tool
-    async def answer_from_faq(self, context: RunContext, question: str) -> Dict[str, Any]:
-        """Return an exact or best-match FAQ answer. If none, say not found."""
-        if not self.faq:
-            return {"found": False, "answer": "I don't have the FAQ loaded."}
-        found = find_faq_answer(self.faq, question)
-        if not found:
-            return {"found": False, "answer": "I don't see that detail in the FAQ. Would you like me to connect you to sales?"}
-        return {"found": True, "answer": found.get("answer")}
+    # ---------- internal helpers ----------
+    def _find_case_by_user(self, name: str) -> Optional[Dict[str, Any]]:
+        name = (name or "").strip().lower()
+        for c in self.cases:
+            if c.get("status") == "pending_review" and c.get("userName", "").lower() == name:
+                return c
+        return None
+
+    def _update_active_case_in_db(self):
+        if not self.active_case:
+            return
+        cases = self.cases
+        target_id = self.active_case.get("id")
+        for i, c in enumerate(cases):
+            if c.get("id") == target_id:
+                cases[i] = self.active_case
+                break
+        save_db(cases)
+
+    # ---------- tools ----------
 
     @function_tool
-    async def gather_lead_field(self, context: RunContext, field: str, value: str) -> Dict[str, Any]:
-        """Store a single lead field as the user provides it."""
-        key = (field or "").strip().lower()
-        if key not in self.lead_schema:
-            return {"ok": False, "message": f"Unknown field {field}"}
-        self.lead[key] = value.strip()
-        return {"ok": True, "lead": self.lead}
-
-    @function_tool
-    async def get_lead_summary(self, context: RunContext) -> Dict[str, Any]:
-        """Return a short one-line summary for the current lead in memory."""
-        if not self.lead:
-            return {"ok": False, "message": "No lead captured yet"}
-        name = self.lead.get("name", "Unknown")
-        company = self.lead.get("company", "Unknown")
-        use_case = self.lead.get("use_case", "Not provided")
-        timeline = self.lead.get("timeline", "Not provided")
-        summary = f"{name} from {company}, interested in {use_case}. Timeline: {timeline}."
-        return {"ok": True, "summary": summary}
-
-    @function_tool
-    async def save_lead(self, context: RunContext) -> Dict[str, Any]:
-        """Persist the current lead to disk and return the saved record."""
-        if not self.lead:
-            return {"ok": False, "message": "No lead to save"}
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **self.lead
-        }
-        _append_lead(record)
-        # clear current lead
-        self.lead = {}
-        return {"ok": True, "saved": record}
-    
-    @function_tool
-    async def finalize_call(self, context: RunContext, user_text: str) -> Dict[str, Any]:
+    async def load_fraud_cases(self, context: RunContext) -> Dict[str, Any]:
         """
-        Called when the user says they are done (e.g. "that's all", "thanks", "I'm done").
-        If email is missing, ask for it. Otherwise, save lead and return summary.
+        Load fraud cases from the local JSON DB.
+        Call this once near the start of the conversation.
         """
-        text = (user_text or "").lower()
-        end_phrases = ["that's all", "that is all", "i'm done", "im done", "thanks", "thank you", "goodbye"]
-        is_end = any(p in text for p in end_phrases)
+        self.cases = load_db()
+        return {"count": len(self.cases), "pending": [c.get("id") for c in self.cases if c.get("status") == "pending_review"]}
 
-        if not is_end:
-            return {"ok": False, "message": "Not an end phrase."}
+    @function_tool
+    async def select_case_for_user(self, context: RunContext, first_name: str) -> Dict[str, Any]:
+        """
+        Select the first 'pending_review' case for a given customer first name.
+        """
+        if not self.cases:
+            self.cases = load_db()
 
-        # If we have no lead fields yet, nothing to save
-        if not self.lead:
-            return {"ok": False, "message": "No lead data captured."}
+        case = self._find_case_by_user(first_name)
+        if case is None:
+            return {"found": False, "message": f"No active fraud case found for {first_name}."}
 
-        # If email missing, ask for it before saving
-        if not self.lead.get("email"):
-            prompt = self.lead_schema.get("email", "What's the best email to reach you at?")
-            return {"ok": False, "need_email": True, "prompt": prompt}
-
-        # All required fields present: save the lead
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **self.lead
+        self.active_case = case
+        return {
+            "found": True,
+            "case_id": case.get("id"),
+            "userName": case.get("userName"),
+            "status": case.get("status"),
         }
-        try:
-            _append_lead(record)
-            # clear current lead in memory
-            self.lead = {}
-            summary = f"Saved lead: {record.get('name','Unknown')} from {record.get('company','Unknown')} - {record.get('use_case','No use case')} (timeline: {record.get('timeline','N/A')})."
-            return {"ok": True, "saved": record, "summary": summary}
-        except Exception:
-            logger.exception("Failed to save lead in finalize_call")
-            return {"ok": False, "message": "Failed to save lead."}
-    
 
     @function_tool
-    async def check_missing_fields(self, context: RunContext) -> Dict[str, Any]:
-        """Return a list of missing lead fields (keys)."""
-        missing = [k for k in self.lead_schema.keys() if not str(self.lead.get(k, "")).strip()]
-        return {"missing": missing}
+    async def get_security_question(self, context: RunContext) -> Dict[str, Any]:
+        """
+        Return the non-sensitive security question for the active case.
+        """
+        if not self.active_case:
+            return {"ok": False, "message": "No active case selected."}
+        q = self.active_case.get("securityQuestion")
+        return {"ok": True, "question": q}
 
-    # Helper to ask missing fields; LLM can call this tool to prompt for the next missing field
     @function_tool
-    async def next_lead_question(self, context: RunContext) -> Dict[str, Any]:
-        for k, prompt in self.lead_schema.items():
-            if k not in self.lead or not str(self.lead.get(k)).strip():
-                return {"field": k, "prompt": prompt}
-        return {"field": None, "prompt": "All done"}
+    async def verify_security_answer(self, context: RunContext, answer: str) -> Dict[str, Any]:
+        """
+        Check the provided answer against the stored security answer.
+        """
+        if not self.active_case:
+            return {"ok": False, "verified": False, "message": "No active case selected."}
+        stored = (self.active_case.get("securityAnswer") or "").strip().lower()
+        given = (answer or "").strip().lower()
+        verified = stored != "" and stored == given
+        return {"ok": True, "verified": verified}
+
+    @function_tool
+    async def get_transaction_details(self, context: RunContext) -> Dict[str, Any]:
+        """
+        Return a structured description of the suspicious transaction for the active case.
+        """
+        if not self.active_case:
+            return {"ok": False, "message": "No active case selected."}
+        c = self.active_case
+        return {
+            "ok": True,
+            "merchant": c.get("transactionName"),
+            "amount": c.get("transactionAmount"),
+            "cardEnding": c.get("cardEnding"),
+            "time": c.get("transactionTime"),
+            "category": c.get("transactionCategory"),
+            "source": c.get("transactionSource"),
+            "location": c.get("transactionLocation"),
+        }
+
+    @function_tool
+    async def mark_case_status(self, context: RunContext, status: str, note: str) -> Dict[str, Any]:
+        """
+        Update the active case status and outcome note.
+
+        Allowed status values:
+        - confirmed_safe
+        - confirmed_fraud
+        - verification_failed
+        """
+        if not self.active_case:
+            return {"ok": False, "message": "No active case selected."}
+
+        allowed = {"confirmed_safe", "confirmed_fraud", "verification_failed"}
+        if status not in allowed:
+            return {"ok": False, "message": f"Invalid status {status}"}
+
+        self.active_case["status"] = status
+        self.active_case["outcomeNote"] = note
+        self.active_case["lastUpdated"] = datetime.now(timezone.utc).isoformat()
+
+        # persist to DB
+        self._update_active_case_in_db()
+        logger.info(f"Case {self.active_case.get('id')} updated to {status}: {note}")
+
+        return {"ok": True, "case_id": self.active_case.get("id"), "status": status, "note": note}
 
 
 def prewarm(proc: JobProcess):
@@ -218,14 +247,16 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    agent = SDRAgent()
+    agent = FraudAgent()
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(voice="en-US-matthew",
-                     tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                     text_pacing=True),
+        tts=murf.TTS(
+            voice="en-US-matthew",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+        ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
@@ -238,24 +269,28 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info(f"Usage: {summary}")
+
+    ctx.add_shutdown_callback(log_usage)
+
     # Start session and connect
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()),
+        room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
+        ),
     )
 
-    # Pre-load the FAQ at startup so the agent can use it quickly
+    # Pre-load fraud DB (optional but nice)
     try:
-        await agent.load_faq(None)
-        logger.info("FAQ loaded for SDR agent")
+        await agent.load_fraud_cases(None)
+        logger.info("Fraud cases loaded at startup")
     except Exception:
-        logger.exception("Failed to load FAQ at startup")
+        logger.exception("Failed to preload fraud cases")
 
-    # Very small helper: if STT provides a final transcript, detect end call
-    # (some platforms use 'user_input_transcribed' event; here we skip event wiring
-    #  because the LLM / tools will check for phrases to finish the call)
-    # Connect
     await ctx.connect()
 
 
