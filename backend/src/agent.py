@@ -1,7 +1,9 @@
+# backend/src/agent.py
 import logging
 import os
 import json
 from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -24,205 +26,189 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-# Path for Day 4 content (as per challenge docs)
-CONTENT_PATH = os.path.join(os.getcwd(), "shared-data", "day4_tutor_content.json")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
+FAQ_PATH = os.path.join(BASE_DIR, "shared_data", "day5_freshworks_faq.json")
+LEADS_DIR = os.path.join(BASE_DIR, "leads")
+LEADS_FILE = os.path.join(LEADS_DIR, "freshworks_leads.json")
 
 
-# ---------- Dynamic Murf Wrapper (runtime voice switching) ----------
-
-class DynamicMurf:
-    """
-    Simple wrapper around murf.TTS that allows switching the voice at runtime.
-
-    It holds an internal murf.TTS instance and recreates it whenever set_voice()
-    is called. LiveKit only sees this wrapper as the TTS implementation.
-    """
-
-    def __init__(self, voice: str, **kwargs: Any):
-        self._kwargs = dict(kwargs)
-        self._voice = voice
-        self._impl = murf.TTS(voice=voice, **self._kwargs)
-
-    def set_voice(self, voice: str):
-        """Switch to a new Murf voice by recreating the underlying TTS."""
-        if voice == self._voice:
-            return
-        logger.info(f"DynamicMurf switching voice from {self._voice} to {voice}")
-        self._voice = voice
-        self._impl = murf.TTS(voice=voice, **self._kwargs)
-
-    def __getattr__(self, item: str):
-        # Delegate all other attribute/method access to the internal TTS instance
-        return getattr(self._impl, item)
+# ---------- helper functions ----------
+def _load_json(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
-# ---------- Tutor Agent ----------
+def _append_lead(record: Dict[str, Any]):
+    os.makedirs(LEADS_DIR, exist_ok=True)
+    data = []
+    if os.path.exists(LEADS_FILE):
+        try:
+            data = json.load(open(LEADS_FILE, encoding="utf-8"))
+            if not isinstance(data, list):
+                data = []
+        except Exception:
+            data = []
+    data.append(record)
+    tmp = LEADS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, LEADS_FILE)
 
-class TutorAgent(Agent):
-    """
-    Teach-the-Tutor active recall coach with 3 modes:
-      - learn: explain concept
-      - quiz: ask questions
-      - teach_back: user explains, agent gives feedback
-    """
 
+# ---------- Simple FAQ search ----------
+def find_faq_answer(faq_list: List[Dict[str, Any]], question_text: str) -> Optional[Dict[str, Any]]:
+    q = (question_text or "").lower()
+    # simple keyword match: find FAQ with the highest overlap of words
+    best = None
+    best_score = 0
+    qwords = set(w for w in q.split() if len(w) > 3)
+    for item in faq_list:
+        txt = (item.get("question", "") + " " + item.get("answer", "")).lower()
+        twords = set(w for w in txt.split() if len(w) > 3)
+        score = len(qwords & twords)
+        if score > best_score:
+            best_score = score
+            best = item
+    # threshold: require at least 1 overlapping word
+    return best if best_score > 0 else None
+
+
+# ---------- Agent ----------
+class SDRAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="""
-You are an active recall tutor with three modes:
+You are an SDR for Freshworks. Greet visitors warmly and ask what brought them here.
+Focus on understanding their needs. Use the provided FAQ content to answer product/pricing questions and do NOT invent details not in the FAQ.
+Collect lead fields: name, company, email, role, use_case, team_size, timeline.
+Speak naturally and be concise. When the user indicates they are done (for example: "that's all", "thanks", "I'm done"), call the tool `finalize_call` with the user's last message. If the tool reports `need_email`, ask the user for their email, gather it via `gather_lead_field`, then call `finalize_call` again to save and close.
+Speak Politely and Professionally at all times.
 
-- learn: you explain a concept in simple, clear language.
-- quiz: you ask short questions about the concept and respond to the user's answers.
-- teach_back: you ask the user to explain the concept back and give simple qualitative feedback.
-
-RULES:
-- Do not use emojis or fancy formatting. Speak as if talking out loud.
-- Keep responses short and focused.
-- You have access to tools: list_concepts, set_mode, choose_concept, explain_concept,
-  ask_quiz_question, evaluate_teach_back.
-- At the start of the conversation:
-  1) Call list_concepts to see available topics.
-  2) Ask the user which mode they want (learn / quiz / teach_back).
-  3) Call set_mode with that mode.
-  4) Ask which concept to study and call choose_concept.
-- When the user asks to switch modes later, call set_mode again.
-
-IMPORTANT:
-- The system will switch your voice when you call set_mode:
-  * learn -> Matthew
-  * quiz -> Alicia
-  * teach_back -> Ken
-You do NOT need to mention voice names, just focus on teaching.
 """.strip()
         )
-
-        self.mode: Optional[str] = None  # "learn" | "quiz" | "teach_back"
-        self.current_concept_id: Optional[str] = None
-        self.content: Dict[str, Dict[str, Any]] = self._load_content()
-
-    def _load_content(self) -> Dict[str, Dict[str, Any]]:
-        """Load concepts from JSON; fall back to a small set if file missing."""
-        if os.path.exists(CONTENT_PATH):
-            try:
-                raw = json.loads(open(CONTENT_PATH, encoding="utf-8").read())
-                if isinstance(raw, list):
-                    return {c["id"]: c for c in raw}
-            except Exception:
-                logger.exception("Failed to load day4_tutor_content.json, using fallback content")
-
-        # Fallback content if file missing or invalid
-        return {
-            "variables": {
-                "id": "variables",
-                "title": "Variables",
-                "summary": "Variables store values so you can reuse and change them later in a program.",
-                "sample_question": "What is a variable in programming and why is it useful?",
-            },
-            "loops": {
-                "id": "loops",
-                "title": "Loops",
-                "summary": "Loops let you repeat actions multiple times without writing the same code again.",
-                "sample_question": "Explain the difference between a for loop and a while loop.",
-            },
+        self.faq: List[Dict[str, Any]] = []
+        self.lead: Dict[str, Any] = {}
+        # default lead collection fields and friendly prompts
+        self.lead_schema = {
+            "name": "Can I have your full name, please?",
+            "company": "What company do you work at?",
+            "role": "What's your role there?",
+            "use_case": "What would you like to use Freshworks for?",
+            "team_size": "How big is your team?",
+            "timeline": "What's your expected timeline to start? (now / soon / later)",
+            "email": "What's the best email to reach you at?"
         }
 
     # ---------- Tools ----------
+    @function_tool
+    async def load_faq(self, context: RunContext) -> Dict[str, Any]:
+        """Load FAQ content from shared_data and return basic metadata."""
+        faq = _load_json(FAQ_PATH)
+        if not isinstance(faq, list):
+            self.faq = []
+            return {"ok": False, "message": "FAQ not found or invalid"}
+        self.faq = faq
+        return {"ok": True, "count": len(faq)}
 
     @function_tool
-    async def list_concepts(self, context: RunContext) -> List[Dict[str, str]]:
-        """List available concepts with id and title."""
-        return [{"id": c["id"], "title": c["title"]} for c in self.content.values()]
+    async def answer_from_faq(self, context: RunContext, question: str) -> Dict[str, Any]:
+        """Return an exact or best-match FAQ answer. If none, say not found."""
+        if not self.faq:
+            return {"found": False, "answer": "I don't have the FAQ loaded."}
+        found = find_faq_answer(self.faq, question)
+        if not found:
+            return {"found": False, "answer": "I don't see that detail in the FAQ. Would you like me to connect you to sales?"}
+        return {"found": True, "answer": found.get("answer")}
 
     @function_tool
-    async def set_mode(self, context: RunContext, mode: str) -> str:
+    async def gather_lead_field(self, context: RunContext, field: str, value: str) -> Dict[str, Any]:
+        """Store a single lead field as the user provides it."""
+        key = (field or "").strip().lower()
+        if key not in self.lead_schema:
+            return {"ok": False, "message": f"Unknown field {field}"}
+        self.lead[key] = value.strip()
+        return {"ok": True, "lead": self.lead}
+
+    @function_tool
+    async def get_lead_summary(self, context: RunContext) -> Dict[str, Any]:
+        """Return a short one-line summary for the current lead in memory."""
+        if not self.lead:
+            return {"ok": False, "message": "No lead captured yet"}
+        name = self.lead.get("name", "Unknown")
+        company = self.lead.get("company", "Unknown")
+        use_case = self.lead.get("use_case", "Not provided")
+        timeline = self.lead.get("timeline", "Not provided")
+        summary = f"{name} from {company}, interested in {use_case}. Timeline: {timeline}."
+        return {"ok": True, "summary": summary}
+
+    @function_tool
+    async def save_lead(self, context: RunContext) -> Dict[str, Any]:
+        """Persist the current lead to disk and return the saved record."""
+        if not self.lead:
+            return {"ok": False, "message": "No lead to save"}
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **self.lead
+        }
+        _append_lead(record)
+        # clear current lead
+        self.lead = {}
+        return {"ok": True, "saved": record}
+    
+    @function_tool
+    async def finalize_call(self, context: RunContext, user_text: str) -> Dict[str, Any]:
         """
-        Set the tutor mode.
-
-        Modes:
-          - learn
-          - quiz
-          - teach_back
-
-        This also switches the Murf voice via the DynamicMurf wrapper.
+        Called when the user says they are done (e.g. "that's all", "thanks", "I'm done").
+        If email is missing, ask for it. Otherwise, save lead and return summary.
         """
-        normalized = (mode or "").strip().lower()
-        if normalized not in {"learn", "quiz", "teach_back"}:
-            return "Unknown mode. Please choose 'learn', 'quiz', or 'teach_back'."
+        text = (user_text or "").lower()
+        end_phrases = ["that's all", "that is all", "i'm done", "im done", "thanks", "thank you", "goodbye"]
+        is_end = any(p in text for p in end_phrases)
 
-        self.mode = normalized
+        if not is_end:
+            return {"ok": False, "message": "Not an end phrase."}
 
-        # Map mode -> Murf voice id (string)
-        voice = "en-US-matthew"
-        if normalized == "quiz":
-            voice = "en-US-alicia"
-        elif normalized == "teach_back":
-            voice = "en-US-ken"
+        # If we have no lead fields yet, nothing to save
+        if not self.lead:
+            return {"ok": False, "message": "No lead data captured."}
 
-        # Try to switch the runtime TTS voice
+        # If email missing, ask for it before saving
+        if not self.lead.get("email"):
+            prompt = self.lead_schema.get("email", "What's the best email to reach you at?")
+            return {"ok": False, "need_email": True, "prompt": prompt}
+
+        # All required fields present: save the lead
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **self.lead
+        }
         try:
-            session = getattr(context, "session", None)
-            if session is not None:
-                tts = getattr(session, "tts", None)
-                if hasattr(tts, "set_voice"):
-                    tts.set_voice(voice)
-                elif tts is not None:
-                    # Best-effort fallback: set attribute directly if supported
-                    setattr(tts, "voice", voice)
-            logger.info(f"Mode set to {normalized}, voice={voice}")
+            _append_lead(record)
+            # clear current lead in memory
+            self.lead = {}
+            summary = f"Saved lead: {record.get('name','Unknown')} from {record.get('company','Unknown')} - {record.get('use_case','No use case')} (timeline: {record.get('timeline','N/A')})."
+            return {"ok": True, "saved": record, "summary": summary}
         except Exception:
-            logger.exception("Failed to switch Murf voice for mode=%s", normalized)
-
-        return f"Mode set to {normalized}."
-
-    @function_tool
-    async def choose_concept(self, context: RunContext, concept_id: str) -> str:
-        """Choose a concept by id (e.g. 'variables', 'loops')."""
-        cid = (concept_id or "").strip().lower()
-        if cid not in self.content:
-            return f"I could not find a concept named '{concept_id}'."
-        self.current_concept_id = cid
-        title = self.content[cid]["title"]
-        return f"Great, we will work on {title}."
+            logger.exception("Failed to save lead in finalize_call")
+            return {"ok": False, "message": "Failed to save lead."}
+    
 
     @function_tool
-    async def explain_concept(self, context: RunContext) -> str:
-        """Return the summary text for the current concept (for learn mode)."""
-        if not self.current_concept_id:
-            return "Please choose a concept first."
-        summary = self.content[self.current_concept_id]["summary"]
-        return summary
+    async def check_missing_fields(self, context: RunContext) -> Dict[str, Any]:
+        """Return a list of missing lead fields (keys)."""
+        missing = [k for k in self.lead_schema.keys() if not str(self.lead.get(k, "")).strip()]
+        return {"missing": missing}
 
+    # Helper to ask missing fields; LLM can call this tool to prompt for the next missing field
     @function_tool
-    async def ask_quiz_question(self, context: RunContext) -> str:
-        """Return a sample quiz question for the current concept (for quiz mode)."""
-        if not self.current_concept_id:
-            return "Please choose a concept first."
-        question = self.content[self.current_concept_id]["sample_question"]
-        return question
-
-    @function_tool
-    async def evaluate_teach_back(self, context: RunContext, user_explanation: str) -> str:
-        """
-        Give simple qualitative feedback on the user's explanation in teach_back mode.
-        Uses rough keyword overlap against the concept summary.
-        """
-        if not self.current_concept_id:
-            return "Please choose a concept first."
-
-        summary = self.content[self.current_concept_id]["summary"].lower()
-        response = (user_explanation or "").lower()
-
-        # Very simple keyword overlap heuristic
-        summary_words = set(summary.split())
-        resp_words = set(response.split())
-        overlap = len(summary_words & resp_words) / max(1, len(summary_words))
-
-        if overlap >= 0.6:
-            return "Nice job explaining that. You captured the main ideas."
-        elif overlap >= 0.3:
-            return "Good start. You mentioned some key points. Try adding why it is useful or an example."
-        else:
-            return "Thanks for explaining. I think you can add more of the core ideas. Try including what it does and why it matters."
+    async def next_lead_question(self, context: RunContext) -> Dict[str, Any]:
+        for k, prompt in self.lead_schema.items():
+            if k not in self.lead or not str(self.lead.get(k)).strip():
+                return {"field": k, "prompt": prompt}
+        return {"field": None, "prompt": "All done"}
 
 
 def prewarm(proc: JobProcess):
@@ -230,21 +216,16 @@ def prewarm(proc: JobProcess):
 
 
 async def entrypoint(ctx: JobContext):
-    # Logging setup
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    # Create the tutor agent
-    agent = TutorAgent()
+    agent = SDRAgent()
 
-    # Set up a voice AI pipeline with DynamicMurf for runtime switching
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=DynamicMurf(
-            voice="en-US-matthew",  # default voice (learn mode)
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-            text_pacing=True,
-        ),
+        tts=murf.TTS(voice="en-US-matthew",
+                     tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+                     text_pacing=True),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
@@ -257,22 +238,24 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
-
-    ctx.add_shutdown_callback(log_usage)
-
-    # Start the session
+    # Start session and connect
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
+        room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()),
     )
 
-    # Connect to the user
+    # Pre-load the FAQ at startup so the agent can use it quickly
+    try:
+        await agent.load_faq(None)
+        logger.info("FAQ loaded for SDR agent")
+    except Exception:
+        logger.exception("Failed to load FAQ at startup")
+
+    # Very small helper: if STT provides a final transcript, detect end call
+    # (some platforms use 'user_input_transcribed' event; here we skip event wiring
+    #  because the LLM / tools will check for phrases to finish the call)
+    # Connect
     await ctx.connect()
 
 
