@@ -1,214 +1,162 @@
-# AI Voice Agents Challenge - Starter Repository
-
-Welcome to the **AI Voice Agents Challenge** by [murf.ai](https://murf.ai)!
-
-## About the Challenge
-
-We just launched **Murf Falcon** – the consistently fastest TTS API, and you're going to be among the first to test it out in ways never thought before!
-
-**Build 10 AI Voice Agents over the course of 10 Days** along with help from our devs and the community champs, and win rewards!
-
-### How It Works
-
-- One task to be provided everyday along with a GitHub repo for reference
-- Build a voice agent with specific personas and skills
-- Post on GitHub and share with the world on LinkedIn!
-
-## Repository Structure
-
-This is a **monorepo** that contains both the backend and frontend for building voice agent applications. It's designed to be your starting point for each day's challenge task.
-
-```
-falcon-tdova-nov25-livekit/
-├── backend/          # LiveKit Agents backend with Murf Falcon TTS
-├── frontend/         # React/Next.js frontend for voice interaction
-├── start_app.sh      # Convenience script to start all services
-└── README.md         # This file
-```
-
-### Backend
-
-The backend is based on [LiveKit's agent-starter-python](https://github.com/livekit-examples/agent-starter-python) with modifications to integrate **Murf Falcon TTS** for ultra-fast, high-quality voice synthesis.
-
-**Features:**
-
-- Complete voice AI agent framework using LiveKit Agents
-- Murf Falcon TTS integration for fastest text-to-speech
-- LiveKit Turn Detector for contextually-aware speaker detection
-- Background voice cancellation
-- Integrated metrics and logging
-- Complete test suite with evaluation framework
-- Production-ready Dockerfile
-
-[→ Backend Documentation](./backend/README.md)
-
-### Frontend
-
-The frontend is based on [LiveKit's agent-starter-react](https://github.com/livekit-examples/agent-starter-react), providing a modern, beautiful UI for interacting with your voice agents.
-
-**Features:**
-
-- Real-time voice interaction with LiveKit Agents
-- Camera video streaming support
-- Screen sharing capabilities
-- Audio visualization and level monitoring
-- Light/dark theme switching
-- Highly customizable branding and UI
-
-[→ Frontend Documentation](./frontend/README.md)
-
-## Quick Start
-
-### Prerequisites
-
-Make sure you have the following installed:
-
-- Python 3.9+ with [uv](https://docs.astral.sh/uv/) package manager
-- Node.js 18+ with pnpm
-- [LiveKit CLI](https://docs.livekit.io/home/cli/cli-setup) (optional but recommended)
-- [LiveKit Server](https://docs.livekit.io/home/self-hosting/local/) for local development
-
-### 1. Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd falcon-tdova-nov25-livekit
-```
-
-### 2. Backend Setup
-
-```bash
-cd backend
-
-# Install dependencies
-uv sync
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with your credentials:
-# - LIVEKIT_URL
-# - LIVEKIT_API_KEY
-# - LIVEKIT_API_SECRET
-# - MURF_API_KEY (for Falcon TTS)
-# - GOOGLE_API_KEY (for Gemini LLM)
-# - DEEPGRAM_API_KEY (for Deepgram STT)
-
-# Download required models
-uv run python src/agent.py download-files
-```
-
-For LiveKit Cloud users, you can automatically populate credentials:
-
-```bash
-lk cloud auth
-lk app env -w -d .env.local
-```
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-pnpm install
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with the same LiveKit credentials
-```
-
-### 4. Run the Application
-
-#### Install livekit server
-
-```bash
-brew install livekit
-```
-
-You have two options:
-
-#### Option A: Use the convenience script (runs everything)
-
-```bash
-# From the root directory
-chmod +x start_app.sh
-./start_app.sh
-```
-
-This will start:
-
-- LiveKit Server (in dev mode)
-- Backend agent (listening for connections)
-- Frontend app (at http://localhost:3000)
-
-#### Option B: Run services individually
-
-```bash
-# Terminal 1 - LiveKit Server
-livekit-server --dev
-
-# Terminal 2 - Backend Agent
-cd backend
-uv run python src/agent.py dev
-
-# Terminal 3 - Frontend
-cd frontend
-pnpm dev
-```
-
-Then open http://localhost:3000 in your browser!
-
-## Daily Challenge Tasks
-
-Each day, you'll receive a new task that builds upon your voice agent. The tasks will help you:
-
-- Implement different personas and conversation styles
-- Add custom tools and capabilities
-- Integrate with external APIs
-- Build domain-specific agents (customer service, tutoring, etc.)
-- Optimize performance and user experience
-
-**Stay tuned for daily task announcements!**
-
-## Documentation & Resources
-
-- [Murf Falcon TTS Documentation](https://murf.ai/api/docs/text-to-speech/streaming)
-- [LiveKit Agents Documentation](https://docs.livekit.io/agents)
-- [Original Backend Template](https://github.com/livekit-examples/agent-starter-python)
-- [Original Frontend Template](https://github.com/livekit-examples/agent-starter-react)
-
-## Testing
-
-The backend includes a comprehensive test suite:
-
-```bash
-cd backend
-uv run pytest
-```
-
-Learn more about testing voice agents in the [LiveKit testing documentation](https://docs.livekit.io/agents/build/testing/).
-
-## Contributing & Community
-
-This is a challenge repository, but we encourage collaboration and knowledge sharing!
-
-- Share your solutions and learnings on GitHub
-- Post about your progress on LinkedIn
-- Join the [LiveKit Community Slack](https://livekit.io/join-slack)
-- Connect with other challenge participants
-
-## License
-
-This project is based on MIT-licensed templates from LiveKit and includes integration with Murf Falcon. See individual LICENSE files in backend and frontend directories for details.
-
-## Have Fun!
-
-Remember, the goal is to learn, experiment, and build amazing voice AI agents. Don't hesitate to be creative and push the boundaries of what's possible with Murf Falcon and LiveKit!
-
-Good luck with the challenge!
+# Day 7 – Food & Grocery Ordering Voice Agent  
+**Murf AI Voice Agent Challenge – Day 7 Submission**
+
+## ✅ Overview
+For Day 7, I built a **Food & Grocery Ordering Voice Assistant** that can understand what a user wants to buy, manage a cart, and finally place the order by writing it into a JSON file.
+
+The goal was to design a natural, conversational ordering experience powered by:
+
+- **Murf Falcon TTS** (Ultra-fast voice generation)
+- **LiveKit Agents** (Voice pipeline)
+- **Deepgram STT**
+- **Google Gemini LLM**
+- JSON-based catalog + order storage
 
 ---
 
-Built for the AI Voice Agents Challenge by murf.ai
+## 📦 Features Implemented (MVP Requirements)
+
+### **1. Catalog JSON**
+Created a catalog file containing food & grocery items across categories:
+
+- Groceries (bread, milk, eggs)
+- Snacks (chips, biscuits)
+- Meals (pizzas, sandwiches, pasta)
+- Condiments (butter, peanut butter, sauces)
+
+Each item includes:
+- `name`
+- `category`
+- `price`
+- `tags`
+- `brand` (optional)
+- `size` (optional)
+
+---
+
+### **2. Voice Ordering Assistant Persona**
+The agent introduces itself as a friendly ordering assistant:
+
+- Greets the user  
+- Explains what it can do  
+- Helps choose items and quantities  
+- Clarifies brand, category, size when needed  
+- Keeps the conversation natural and simple  
+
+---
+
+## 🛒 Cart Management
+The agent maintains a persistent **cart**:
+
+Supports:
+- Adding items  
+- Removing items  
+- Updating quantity  
+- Listing cart items  
+- Confirming changes verbally  
+
+Example commands:
+```
+Add two packs of milk
+Remove bread
+What’s in my cart?
+Add chips
+```
+
+---
+
+## 🥪 Intelligent Recipe Assistant
+Agent can handle **recipe-based** or **ingredient-based** requests:
+
+Examples:
+- “Ingredients for a peanut butter sandwich”
+- “Give me ingredients for pasta for two”
+- “I want to make maggi”
+
+Recipe mapping:
+```json
+{
+  "peanut_butter_sandwich": ["bread", "peanut butter"],
+  "pasta_two_people": ["pasta", "pasta sauce"],
+  "maggi": ["maggi masala noodles"]
+}
+```
+
+Agent automatically:
+- Detects the intent  
+- Adds all needed items to cart  
+- Confirms verbally  
+
+---
+
+## 📄 Order Placement & JSON Storage
+When user says:
+- “Place my order”
+- “That’s all”
+- “I’m done”
+
+The agent:
+1. Reads the final cart  
+2. Calculates total  
+3. Creates an order JSON file  
+4. Saves it to disk  
+5. Confirms order placement  
+
+Example:
+```json
+{
+  "order_id": "order_001",
+  "timestamp": "2025-02-19T14:28:11Z",
+  "items": [
+    { "name": "bread", "qty": 1, "price": 40 },
+    { "name": "peanut butter", "qty": 1, "price": 160 }
+  ],
+  "total": 200
+}
+```
+
+---
+
+## 🗂 File Structure
+```
+backend/
+  ├── catalog/
+  │     └── day7_catalog.json
+  ├── orders/
+  │     └── order_001.json
+  ├── src/
+        └── agent.py
+
+frontend/
+  └── components/
+        └── welcome-view.tsx
+```
+
+---
+
+## 🛠 Tools Used
+- Murf Falcon TTS  
+- LiveKit Agents  
+- Deepgram STT  
+- Google Gemini 2.5 Flash  
+- Next.js frontend  
+- JSON for catalog + orders  
+
+---
+
+## ✅ MVP Checklist (Completed)
+✔ Catalog JSON created  
+✔ Adds/removes/updates cart items  
+✔ Lists cart  
+✔ Handles “ingredients for X”  
+✔ Saves final order to JSON  
+✔ Fully voice-controlled  
+
+---
+
+## 🎉 Conclusion
+This ordering agent simulates a real quick-commerce workflow using natural conversation.  
+Excited for Day 8!
+
+#MurfAIVoiceAgentsChallenge  
+#10DaysofAIVoiceAgents  
