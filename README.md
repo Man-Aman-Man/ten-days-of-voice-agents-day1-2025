@@ -1,214 +1,110 @@
-# AI Voice Agents Challenge - Starter Repository
-
-Welcome to the **AI Voice Agents Challenge** by [murf.ai](https://murf.ai)!
-
-## About the Challenge
-
-We just launched **Murf Falcon** – the consistently fastest TTS API, and you're going to be among the first to test it out in ways never thought before!
-
-**Build 10 AI Voice Agents over the course of 10 Days** along with help from our devs and the community champs, and win rewards!
-
-### How It Works
-
-- One task to be provided everyday along with a GitHub repo for reference
-- Build a voice agent with specific personas and skills
-- Post on GitHub and share with the world on LinkedIn!
-
-## Repository Structure
-
-This is a **monorepo** that contains both the backend and frontend for building voice agent applications. It's designed to be your starting point for each day's challenge task.
-
-```
-falcon-tdova-nov25-livekit/
-├── backend/          # LiveKit Agents backend with Murf Falcon TTS
-├── frontend/         # React/Next.js frontend for voice interaction
-├── start_app.sh      # Convenience script to start all services
-└── README.md         # This file
-```
-
-### Backend
-
-The backend is based on [LiveKit's agent-starter-python](https://github.com/livekit-examples/agent-starter-python) with modifications to integrate **Murf Falcon TTS** for ultra-fast, high-quality voice synthesis.
-
-**Features:**
-
-- Complete voice AI agent framework using LiveKit Agents
-- Murf Falcon TTS integration for fastest text-to-speech
-- LiveKit Turn Detector for contextually-aware speaker detection
-- Background voice cancellation
-- Integrated metrics and logging
-- Complete test suite with evaluation framework
-- Production-ready Dockerfile
-
-[→ Backend Documentation](./backend/README.md)
-
-### Frontend
-
-The frontend is based on [LiveKit's agent-starter-react](https://github.com/livekit-examples/agent-starter-react), providing a modern, beautiful UI for interacting with your voice agents.
-
-**Features:**
-
-- Real-time voice interaction with LiveKit Agents
-- Camera video streaming support
-- Screen sharing capabilities
-- Audio visualization and level monitoring
-- Light/dark theme switching
-- Highly customizable branding and UI
-
-[→ Frontend Documentation](./frontend/README.md)
-
-## Quick Start
-
-### Prerequisites
-
-Make sure you have the following installed:
-
-- Python 3.9+ with [uv](https://docs.astral.sh/uv/) package manager
-- Node.js 18+ with pnpm
-- [LiveKit CLI](https://docs.livekit.io/home/cli/cli-setup) (optional but recommended)
-- [LiveKit Server](https://docs.livekit.io/home/self-hosting/local/) for local development
-
-### 1. Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd falcon-tdova-nov25-livekit
-```
-
-### 2. Backend Setup
-
-```bash
-cd backend
-
-# Install dependencies
-uv sync
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with your credentials:
-# - LIVEKIT_URL
-# - LIVEKIT_API_KEY
-# - LIVEKIT_API_SECRET
-# - MURF_API_KEY (for Falcon TTS)
-# - GOOGLE_API_KEY (for Gemini LLM)
-# - DEEPGRAM_API_KEY (for Deepgram STT)
-
-# Download required models
-uv run python src/agent.py download-files
-```
-
-For LiveKit Cloud users, you can automatically populate credentials:
-
-```bash
-lk cloud auth
-lk app env -w -d .env.local
-```
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-pnpm install
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with the same LiveKit credentials
-```
-
-### 4. Run the Application
-
-#### Install livekit server
-
-```bash
-brew install livekit
-```
-
-You have two options:
-
-#### Option A: Use the convenience script (runs everything)
-
-```bash
-# From the root directory
-chmod +x start_app.sh
-./start_app.sh
-```
-
-This will start:
-
-- LiveKit Server (in dev mode)
-- Backend agent (listening for connections)
-- Frontend app (at http://localhost:3000)
-
-#### Option B: Run services individually
-
-```bash
-# Terminal 1 - LiveKit Server
-livekit-server --dev
-
-# Terminal 2 - Backend Agent
-cd backend
-uv run python src/agent.py dev
-
-# Terminal 3 - Frontend
-cd frontend
-pnpm dev
-```
-
-Then open http://localhost:3000 in your browser!
-
-## Daily Challenge Tasks
-
-Each day, you'll receive a new task that builds upon your voice agent. The tasks will help you:
-
-- Implement different personas and conversation styles
-- Add custom tools and capabilities
-- Integrate with external APIs
-- Build domain-specific agents (customer service, tutoring, etc.)
-- Optimize performance and user experience
-
-**Stay tuned for daily task announcements!**
-
-## Documentation & Resources
-
-- [Murf Falcon TTS Documentation](https://murf.ai/api/docs/text-to-speech/streaming)
-- [LiveKit Agents Documentation](https://docs.livekit.io/agents)
-- [Original Backend Template](https://github.com/livekit-examples/agent-starter-python)
-- [Original Frontend Template](https://github.com/livekit-examples/agent-starter-react)
-
-## Testing
-
-The backend includes a comprehensive test suite:
-
-```bash
-cd backend
-uv run pytest
-```
-
-Learn more about testing voice agents in the [LiveKit testing documentation](https://docs.livekit.io/agents/build/testing/).
-
-## Contributing & Community
-
-This is a challenge repository, but we encourage collaboration and knowledge sharing!
-
-- Share your solutions and learnings on GitHub
-- Post about your progress on LinkedIn
-- Join the [LiveKit Community Slack](https://livekit.io/join-slack)
-- Connect with other challenge participants
-
-## License
-
-This project is based on MIT-licensed templates from LiveKit and includes integration with Murf Falcon. See individual LICENSE files in backend and frontend directories for details.
-
-## Have Fun!
-
-Remember, the goal is to learn, experiment, and build amazing voice AI agents. Don't hesitate to be creative and push the boundaries of what's possible with Murf Falcon and LiveKit!
-
-Good luck with the challenge!
-
----
-
-Built for the AI Voice Agents Challenge by murf.ai
+========================================
+DAY 8 – ZOMBIE WASTELAND VOICE GAME MASTER
+========================================
+
+This project is my submission for Day 8 of the Murf AI Voice Agent Challenge.
+The goal for today was to build a D&D-style voice-driven game master that runs
+an interactive adventure purely through speech. My chosen theme:
+A ZOMBIE APOCALYPSE STORY called "The Last Cure in Greyford".
+
+----------------------------------------
+1. OVERVIEW
+----------------------------------------
+This agent acts as a Game Master (GM) running a voice-only interactive story.
+It describes scenes, listens to player responses, remembers past actions,
+and drives the plot forward entirely through speech-to-text + LLM + TTS.
+
+The story is set in a destroyed city called Greyford where the player searches
+for clues toward a rumored cure hidden in an abandoned hospital lab.
+
+----------------------------------------
+2. FEATURES
+----------------------------------------
+
+UNIVERSE & TONE
+- Setting: Greyford, a ruined city overrun by infected.
+- Tone: cinematic, tense, but still clear and easy to follow.
+- Player goal: reach the old hospital lab to find cure research.
+
+GM BEHAVIOR
+- Describes scenes using short vivid sentences.
+- Always ends with a prompt: “What do you do?”
+- Remembers recent player decisions.
+- If the player asks “restart”, a backend tool resets the adventure.
+- If the player says they want to stop, the GM gives a short farewell.
+
+STATE MANAGEMENT
+- Simple Python state: story history, turn counter, a small world “seed”.
+- Chat history handles continuity for the LLM.
+- Tools:
+  - restart_adventure
+  - get_session_summary
+
+TECH USED
+- LiveKit AgentSession
+- Gemini 2.5 Flash (LLM)
+- Murf TTS (Matthew)
+- Deepgram Nova-3 STT
+- Silero VAD + Multilingual turn detection
+- Node/Next.js frontend for voice UI
+
+----------------------------------------
+3. FILES
+----------------------------------------
+backend/src/agent.py
+- Contains ZombieCureAgent
+- Tools for restart + summary
+- System prompt defining universe + rules
+
+frontend/components/app/welcome-view.tsx
+- Dark post-apocalyptic UI
+- Story intro + start button
+
+----------------------------------------
+4. GAME FLOW
+----------------------------------------
+
+TURN FORMAT:
+1. GM describes situation
+2. Ends with “What do you do?”
+3. Player responds by voice
+4. GM continues story logically
+
+TARGET LENGTH:
+8–14 turns for a satisfying mini-arc.
+
+TYPICAL MINI-ARC:
+- Start in a safehouse
+- Sneak through streets or rooftops
+- Encounter infected or obstacles
+- Reach the abandoned hospital or discover major clue
+
+----------------------------------------
+5. HOW TO RUN
+----------------------------------------
+1. Start backend:
+   uvicorn or `python agent.py` (LiveKit worker)
+2. Start frontend Next.js app
+3. Click “Enter the Wasteland”
+4. Speak naturally to play
+
+----------------------------------------
+6. RESTART / END
+----------------------------------------
+- Say “restart” for a new adventure
+- Say “I want to stop” to end the game
+
+----------------------------------------
+7. COMPLETION STATUS
+----------------------------------------
+✓ Universe with clear style
+✓ GM persona implemented
+✓ Voice-only interaction
+✓ Turn-by-turn adventure
+✓ LLM memory through chat history
+✓ Restart capability
+✓ Fully playable session
+
+----------------------------------------
+END OF README
+----------------------------------------
