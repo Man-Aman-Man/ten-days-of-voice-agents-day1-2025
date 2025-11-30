@@ -1,8 +1,6 @@
 import logging
-import os
-import json
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -23,526 +21,291 @@ from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
+
 load_dotenv(".env.local")
 
-DEFAULT_VOICE = "en-US-matthew"
+DEFAULT_VOICE = "en-US-alina"
 
-# Get the current script's directory more reliably
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ORDERS_DIR = os.path.join(BASE_DIR, "orders")
-ORDERS_FILE = os.path.join(ORDERS_DIR, "day9_orders.json")
+# ---------------- Improv scenarios ----------------
 
-# Ensure orders directory exists at module load
-os.makedirs(ORDERS_DIR, exist_ok=True)
-
-# -------------------------------------------------------------------
-#  CATALOG (in-code, ACP-style structure)
-# -------------------------------------------------------------------
-
-CATALOG: List[Dict[str, Any]] = [
-    {
-        "id": "mug-001",
-        "name": "Stoneware Coffee Mug",
-        "description": "Sturdy stoneware coffee mug with a matte finish.",
-        "price": 799,
-        "currency": "INR",
-        "category": "mug",
-        "color": "white",
-    },
-    {
-        "id": "mug-002",
-        "name": "Blue Ceramic Mug",
-        "description": "Glossy blue ceramic mug, 350ml.",
-        "price": 599,
-        "currency": "INR",
-        "category": "mug",
-        "color": "blue",
-    },
-    {
-        "id": "tee-001",
-        "name": "Minimal Logo T-Shirt",
-        "description": "Black cotton tee with a small chest logo.",
-        "price": 899,
-        "currency": "INR",
-        "category": "tshirt",
-        "color": "black",
-        "sizes": ["S", "M", "L", "XL"],
-    },
-    {
-        "id": "tee-002",
-        "name": "Graphic T-Shirt",
-        "description": "White t-shirt with a subtle abstract graphic.",
-        "price": 1099,
-        "currency": "INR",
-        "category": "tshirt",
-        "color": "white",
-        "sizes": ["M", "L"],
-    },
-    {
-        "id": "hood-001",
-        "name": "Classic Black Hoodie",
-        "description": "Soft fleece hoodie with kangaroo pocket.",
-        "price": 1599,
-        "currency": "INR",
-        "category": "hoodie",
-        "color": "black",
-        "sizes": ["M", "L", "XL"],
-    },
-    {
-        "id": "hood-002",
-        "name": "Olive Green Hoodie",
-        "description": "Lightweight hoodie, perfect for layering.",
-        "price": 1399,
-        "currency": "INR",
-        "category": "hoodie",
-        "color": "green",
-        "sizes": ["S", "M", "L"],
-    },
-    {
-        "id": "acc-001",
-        "name": "Canvas Tote Bag",
-        "description": "Reusable off-white canvas tote bag.",
-        "price": 499,
-        "currency": "INR",
-        "category": "accessory",
-        "color": "beige",
-    },
-    {
-        "id": "acc-002",
-        "name": "Black Baseball Cap",
-        "description": "Adjustable cap with curved visor.",
-        "price": 699,
-        "currency": "INR",
-        "category": "accessory",
-        "color": "black",
-    },
+SCENARIOS: List[str] = [
+    # 1
+    "You are a time-travelling tour guide who has just arrived in the year 1820. "
+    "You must explain what a smartphone is to someone who has only seen letters, candles, and horses.",
+    # 2
+    "You are a sleepy barista who just discovered that one customer's latte is actually a portal to another dimension. "
+    "You have to tell them this in the calmest voice possible.",
+    # 3
+    "You are a restaurant waiter and the customer's order has literally escaped the kitchen and is running around the dining room. "
+    "You must explain this to the customer without sounding crazy.",
+    # 4
+    "You are a customer trying to return an obviously cursed object to a shop owner who absolutely refuses to admit it is cursed.",
+    # 5
+    "You are an over-enthusiastic fitness instructor, but you are actually terrified of exercise. "
+    "You are leading a class while secretly trying to avoid doing any real workout.",
 ]
 
-ORDERS: List[Dict[str, Any]] = []
 
-
-# -------------------------------------------------------------------
-#  Helpers: load/save orders, normalize categories, filter products
-# -------------------------------------------------------------------
-
-def _ensure_orders_loaded() -> None:
-    """Load existing orders from JSON (if any) into ORDERS."""
-    global ORDERS
-    try:
-        logger.info(f"Looking for orders file at: {ORDERS_FILE}")
-        logger.info(f"Orders directory exists: {os.path.exists(ORDERS_DIR)}")
-        
-        if not os.path.exists(ORDERS_FILE):
-            logger.info("No existing orders file found, starting fresh")
-            ORDERS = []
-            # Create initial empty orders file
-            _persist_orders()
-            return
-            
-        with open(ORDERS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            
-        if isinstance(data, list):
-            ORDERS = data
-            logger.info("Successfully loaded %d existing orders", len(ORDERS))
-        else:
-            logger.warning("Orders file contains invalid data (not a list), starting fresh")
-            ORDERS = []
-            _persist_orders()
-            
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error in orders file: {e}")
-        logger.info("Creating fresh orders file due to JSON error")
-        ORDERS = []
-        _persist_orders()
-    except Exception as e:
-        logger.error(f"Unexpected error loading orders: {e}")
-        logger.info("Starting with empty orders due to error")
-        ORDERS = []
-        # Don't try to persist here as it might cause infinite recursion
-
-
-def _persist_orders() -> None:
-    """Write ORDERS list to JSON atomically."""
-    try:
-        logger.info(f"Persisting {len(ORDERS)} orders to {ORDERS_FILE}")
-        
-        # Ensure directory exists
-        os.makedirs(ORDERS_DIR, exist_ok=True)
-        logger.info(f"Orders directory ensured: {os.path.exists(ORDERS_DIR)}")
-        
-        tmp = ORDERS_FILE + ".tmp"
-        
-        # Write to temporary file first
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(ORDERS, f, indent=2, ensure_ascii=False, default=str)
-        
-        # Atomic replace
-        if os.path.exists(ORDERS_FILE):
-            os.remove(ORDERS_FILE)
-        os.rename(tmp, ORDERS_FILE)
-        
-        logger.info(f"Successfully persisted orders. File exists: {os.path.exists(ORDERS_FILE)}")
-        
-    except Exception as e:
-        logger.error(f"Failed to persist orders: {e}")
-        # Don't raise, just log - we don't want to break the agent
-
-
-def _normalize_category(raw: Optional[str]) -> Optional[str]:
-    """Map 'hoodies', 't-shirts', 'tees', 'mugs', etc. into stable keys."""
-    if not raw:
-        return None
-        
-    s = raw.strip().lower()
-    s = s.replace("-", "").replace(" ", "")
-    if s.endswith("s"):
-        s = s[:-1]
-
-    mapping = {
-        "mug": "mug",
-        "coffee": "mug",
-        "coffeemug": "mug",
-        "cup": "mug",
-        "tshirt": "tshirt",
-        "tee": "tshirt",
-        "shirt": "tshirt",
-        "hoodie": "hoodie",
-        "hood": "hoodie",
-        "sweatshirt": "hoodie",
-        "jumper": "hoodie",
-        "accessory": "accessory",
-        "cap": "accessory",
-        "hat": "accessory",
-        "bag": "accessory",
-        "tote": "accessory",
-    }
-    return mapping.get(s, s)
-
-
-def _filter_products(
-    category: Optional[str] = None,
-    max_price: Optional[int] = None,
-    color: Optional[str] = None,
-    text_query: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+class ImprovAgent(Agent):
     """
-    Lenient filtering:
-      - category / color are normalized and treated as soft filters.
-      - text_query checks name+description.
-      - if filters yield 0, we fall back to full catalog.
-    """
-    try:
-        cat_norm = _normalize_category(category)
-        color_norm = color.strip().lower() if color else None
-        text_norm = text_query.strip().lower() if text_query else None
-
-        results: List[Dict[str, Any]] = []
-
-        for p in CATALOG:
-            # max price is hard filter
-            if max_price is not None and p.get("price", 0) > max_price:
-                continue
-
-            pc = _normalize_category(p.get("category"))
-            if cat_norm and pc != cat_norm:
-                continue
-
-            if color_norm:
-                pc_color = str(p.get("color", "")).lower()
-                if color_norm not in pc_color:
-                    continue
-
-            if text_norm:
-                blob = (p.get("name", "") + " " + p.get("description", "")).lower()
-                if text_norm not in blob:
-                    continue
-
-            results.append(p)
-
-        # If filters applied but nothing found, fall back to entire catalog
-        if not results and (cat_norm or max_price is not None or color_norm or text_norm):
-            logger.info(
-                "Filters matched no products (category=%r, max_price=%r, color=%r, text=%r). "
-                "Falling back to full catalog.",
-                cat_norm,
-                max_price,
-                color_norm,
-                text_norm,
-            )
-            return CATALOG.copy()
-
-        # No filters means return all
-        if not results and not (cat_norm or max_price is not None or color_norm or text_norm):
-            return CATALOG.copy()
-
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error filtering products: {e}")
-        # Always return the full catalog as fallback
-        return CATALOG.copy()
-
-
-def _find_product_by_id(pid: str) -> Optional[Dict[str, Any]]:
-    try:
-        for p in CATALOG:
-            if p.get("id") == pid:
-                return p
-        return None
-    except Exception as e:
-        logger.error(f"Error finding product by ID {pid}: {e}")
-        return None
-
-
-# -------------------------------------------------------------------
-#  Agent
-# -------------------------------------------------------------------
-
-class CommerceAgent(Agent):
-    """
-    Voice shopping assistant with ACP-style separation:
-    - Conversation handled by LLM + voice.
-    - Catalog + orders handled by Python tools.
+    High-energy improv show host for 'Improv Battle'.
+    Maintains simple per-session state in Python.
     """
 
     def __init__(self) -> None:
-        # Initialize orders before calling parent constructor
-        logger.info("Initializing CommerceAgent...")
-        _ensure_orders_loaded()
-        
         super().__init__(
             instructions="""
-You are a calm, reliable voice shopping assistant for a fictional online store.
+You are the host of a wild TV improv show called "Improv Battle".
 
-You follow an Agentic Commerce style:
-- You handle conversation in natural language.
-- You use tools to browse the catalog and create orders.
-- You NEVER invent products, ids, or prices. Only use tool results.
+ROLE:
+- You are high-energy, witty, and playful.
+- You explain the rules clearly.
+- You guide the player through several short improv scenes.
+- After each scene, you react: sometimes amused, sometimes unimpressed, sometimes pleasantly surprised.
+- You must always stay respectful and safe: no insults, slurs, or personal attacks.
 
-CATALOG:
-- Products include mugs, t-shirts, hoodies, and accessories.
-- Each product has id, name, price, currency, category, color, and sometimes sizes.
+PLAYER:
+- There is one human player (the contestant).
+- Use their name if they tell you one (for example: "Nice job, Aman!").
 
-WHEN USER WANTS TO BROWSE OR CHECK AVAILABILITY:
-- If the user asks things like:
-  - "Any hoodies available?"
-  - "Show me mugs."
-  - "Do you have a blue mug?"
-  - "T-shirts under 1000 rupees."
-  - "What products do you have?"
-  you MUST call the tool `list_products` with simple filters:
-    - category: a short word like "hoodie", "mug", "tshirt", "accessory" if you can infer it.
-    - max_price: integer if they mention a budget.
-    - color: if they mention color.
-    - text_query: if they say something like "coffee mug" or "minimal logo".
-- After calling `list_products`, ALWAYS read out a few items with numbering:
-  Example:
-    "I found 2 hoodies. (1) Classic Black Hoodie for 1599 rupees. (2) Olive Green Hoodie for 1399 rupees."
-- If `count` is 0, you can say "I could not find an exact match, but here are some other items in the store"
-  and then call `list_products` again with fewer or no filters.
-- Never claim the store is completely empty, because the catalog is always available.
+GAME STRUCTURE:
+- Use the tool `get_improv_state` at the beginning to check current_round, max_rounds, and phase.
+- If phase is "intro":
+  1) Briefly welcome the player to "Improv Battle".
+  2) Explain the rules in 2–4 simple sentences.
+  3) If player_name is missing, politely ask for their name or what you should call them.
+  4) Call `set_player_name` if they give you a name.
+  5) Then start the first round by calling `start_next_round`.
 
-WHEN USER WANTS TO BUY:
-- If the user says things like:
-  - "I'll buy the second hoodie."
-  - "Get me that blue mug."
-  - "Buy the first t-shirt in size M."
-- Use recent tool results and your own reasoning to pick the product id.
-- Then call `create_order` with:
-    product_id: chosen product id
-    quantity: default 1 unless they clearly say 2 or more
-    size: pass a size like "S", "M", "L", "XL" if the product has sizes and the user mentions one.
-- After the tool returns, confirm:
-  - product name
-  - size (if any)
-  - quantity
-  - total price in rupees
-  - order id
+- For each round:
+  1) Call `get_improv_state` to know current_round and max_rounds.
+  2) If current_round >= max_rounds, call `end_show` and provide a closing summary.
+  3) Otherwise, call `start_next_round` to get a scenario text.
+  4) Read the scenario out loud in an energetic host style.
+  5) Tell the player clearly: "Act this out now. When you want to stop, say 'end scene' or 'okay I'm done'."
 
-LAST ORDER:
-- If the user asks "What did I just buy?" or "What was my last order?",
-  call `get_last_order` and summarize the latest order.
+- While the scene is running:
+  - Stay mostly silent and let the player speak.
+  - If they seem stuck, you can gently encourage them: "Keep going, what happens next?"
+  - When they say something like "end scene", "I'm done", or clearly stop improvising:
+    1) Call `record_reaction` with a short reaction text and a tone: "positive", "neutral", or "critical".
+    2) Then speak your reaction, mixing praise and gentle critique.
+    3) Move on to the next round by calling `start_next_round` again (if rounds remain).
 
-STYLE:
-- Short, clear, friendly.
-- Mention prices in "rupees" or "INR".
-- This is a demo: never talk about real payment, delivery address, or refunds.
+REACTION STYLE:
+- Sometimes supportive:
+  - "That was hilarious, especially the part where..."
+- Sometimes neutral:
+  - "Interesting idea, you had some good moments but it felt a bit rushed."
+- Sometimes gently critical:
+  - "You could have leaned more into the character's emotions; it felt a bit flat in the middle."
+- Always constructive and kind.
 
-ERROR HANDLING:
-- If any tool fails, just apologize and ask the user to try again.
-- Never mention technical errors to the user.
+EARLY EXIT:
+- If the player says "stop game", "end show", or clearly wants to quit:
+  - Acknowledge it.
+  - Call `end_show` once with a short summary.
+  - Thank them and end gracefully.
+
+STATE:
+- The tools manage:
+  - player_name
+  - current_round
+  - max_rounds
+  - rounds (each has: scenario, host_reaction, tone, timestamp)
+  - phase: "intro" | "awaiting_improv" | "reacting" | "done"
+
+IMPORTANT:
+- Do NOT talk about tools explicitly.
+- Do NOT mention JSON or state variables.
+- Just sound like a fun improv host.
+- Keep each message short enough that it feels like a real conversation.
 """
         )
-        logger.info("CommerceAgent initialized successfully")
 
-    # -------------------- Tools --------------------
+        # Per-session improv state (not persisted; just in memory)
+        self.improv_state: Dict[str, Any] = {
+            "player_name": None,
+            "current_round": 0,
+            "max_rounds": 3,
+            "rounds": [],  # list of {"round": int, "scenario": str, "host_reaction": str, "tone": str, "timestamp": str}
+            "phase": "intro",  # "intro" | "awaiting_improv" | "reacting" | "done"
+        }
+
+    # ------------- internal helpers -------------
+
+    def _current_scenario(self) -> Optional[str]:
+        idx = self.improv_state.get("current_round", 0)
+        if 0 <= idx < len(SCENARIOS):
+            return SCENARIOS[idx]
+        return None
+
+    def _next_scenario(self) -> Optional[str]:
+        idx = self.improv_state.get("current_round", 0)
+        if idx >= len(SCENARIOS):
+            return None
+        return SCENARIOS[idx]
+
+    # ------------- tools exposed to the LLM -------------
 
     @function_tool
-    async def list_products(
+    async def get_improv_state(self, context: RunContext) -> Dict[str, Any]:
+        """
+        Get the current improv game state.
+
+        Use this at the beginning and between rounds to decide what to do next.
+        """
+        return self.improv_state
+
+    @function_tool
+    async def set_player_name(self, context: RunContext, name: str) -> Dict[str, Any]:
+        """
+        Set or update the player's name.
+
+        Use this when the player tells you what to call them.
+        """
+        cleaned = name.strip()
+        if cleaned:
+            self.improv_state["player_name"] = cleaned
+        return {"ok": True, "player_name": self.improv_state["player_name"]}
+
+    @function_tool
+    async def start_next_round(self, context: RunContext) -> Dict[str, Any]:
+        """
+        Advance to the next round and return the scenario for that round.
+
+        If the game is already done, this will indicate that no more rounds remain.
+        """
+        # If already done, do nothing
+        if self.improv_state.get("phase") == "done":
+            return {"ok": False, "message": "Game already finished.", "scenario": None}
+
+        current = self.improv_state.get("current_round", 0)
+        max_rounds = self.improv_state.get("max_rounds", 3)
+
+        if current >= max_rounds:
+            self.improv_state["phase"] = "done"
+            return {"ok": False, "message": "No more rounds remaining.", "scenario": None}
+
+        scenario = self._next_scenario()
+        if scenario is None:
+            self.improv_state["phase"] = "done"
+            return {"ok": False, "message": "No more scenarios available.", "scenario": None}
+
+        # Update state
+        self.improv_state["phase"] = "awaiting_improv"
+        # scenario index is same as current_round
+        return {
+            "ok": True,
+            "round_index": current,
+            "max_rounds": max_rounds,
+            "scenario": scenario,
+        }
+
+    @function_tool
+    async def record_reaction(
         self,
         context: RunContext,
-        category: Optional[str] = None,
-        max_price: Optional[int] = None,
-        color: Optional[str] = None,
-        text_query: Optional[str] = None,
+        host_reaction: str,
+        tone: str,
     ) -> Dict[str, Any]:
         """
-        Browse the product catalog using lenient filters.
+        Record the host's reaction to the last round.
+
+        Args:
+            host_reaction: what you (the host) thought about the performance.
+            tone: one of "positive", "neutral", or "critical".
+
+        After calling this:
+        - The current_round is incremented by 1.
+        - Phase is set to "reacting" temporarily; you can then move to the next round
+          by calling `start_next_round`, or call `end_show` if the game is over.
         """
-        try:
-            products = _filter_products(
-                category=category,
-                max_price=max_price,
-                color=color,
-                text_query=text_query,
-            )
-            logger.info(
-                "list_products called with category=%r, max_price=%r, color=%r, text=%r -> %d results",
-                category,
-                max_price,
-                color,
-                text_query,
-                len(products),
-            )
-            return {"count": len(products), "products": products}
-        except Exception as e:
-            logger.error(f"Error in list_products: {e}")
-            # Return empty result instead of failing
-            return {"count": 0, "products": []}
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.improv_state.get("current_round", 0)
+        max_rounds = self.improv_state.get("max_rounds", 3)
+
+        entry = {
+            "round": current,
+            "scenario": self._current_scenario(),
+            "host_reaction": host_reaction.strip(),
+            "tone": tone.strip().lower(),
+            "timestamp": now,
+        }
+        self.improv_state["rounds"].append(entry)
+
+        # advance round
+        self.improv_state["current_round"] = current + 1
+        # phase will typically be followed by either another start_next_round or end_show
+        self.improv_state["phase"] = "reacting"
+
+        done = self.improv_state["current_round"] >= max_rounds
+        return {"ok": True, "done": done, "state": self.improv_state}
 
     @function_tool
-    async def create_order(
-        self,
-        context: RunContext,
-        product_id: str,
-        quantity: int = 1,
-        size: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    async def end_show(self, context: RunContext, summary: str) -> Dict[str, Any]:
         """
-        Create an order for a single product.
+        Mark the improv show as finished and store a final summary.
+
+        Use this when:
+        - All rounds are complete, or
+        - The player clearly wants to stop the game early.
         """
-        try:
-            product = _find_product_by_id(product_id)
-            if product is None:
-                logger.warning("create_order called with unknown product_id=%r", product_id)
-                return {"ok": False, "error": f"Unknown product id {product_id!r}"}
-
-            quantity = max(1, quantity)
-            order_id = f"ORD-{int(datetime.now(timezone.utc).timestamp())}"
-            line_total = product["price"] * quantity
-
-            item: Dict[str, Any] = {
-                "product_id": product["id"],
-                "name": product["name"],
-                "quantity": quantity,
-                "unit_price": product["price"],
-            }
-            if size:
-                item["size"] = size
-
-            order: Dict[str, Any] = {
-                "id": order_id,
-                "items": [item],
-                "total": line_total,
-                "currency": product.get("currency", "INR"),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            ORDERS.append(order)
-            _persist_orders()
-
-            logger.info(
-                "Created order %s for product %s x%d (size=%r, total=%d)",
-                order_id,
-                product["id"],
-                quantity,
-                size,
-                line_total,
-            )
-
-            return {"ok": True, "order": order}
-            
-        except Exception as e:
-            logger.error(f"Error in create_order: {e}")
-            return {"ok": False, "error": f"Failed to create order: {str(e)}"}
-
-    @function_tool
-    async def get_last_order(self, context: RunContext) -> Dict[str, Any]:
-        """
-        Return the most recent order placed in this system.
-        """
-        try:
-            if not ORDERS:
-                return {"ok": False, "message": "No orders have been placed yet."}
-            return {"ok": True, "order": ORDERS[-1]}
-        except Exception as e:
-            logger.error(f"Error in get_last_order: {e}")
-            return {"ok": False, "message": "Error retrieving last order"}
+        self.improv_state["phase"] = "done"
+        self.improv_state["final_summary"] = summary.strip()
+        self.improv_state["ended_at"] = datetime.now(timezone.utc).isoformat()
+        return {"ok": True, "state": self.improv_state}
 
 
-# -------------------------------------------------------------------
-#  LiveKit wiring
-# -------------------------------------------------------------------
+# ---------------- LiveKit plumbing ----------------
 
 def prewarm(proc: JobProcess):
-    logger.info("Prewarming agent...")
     proc.userdata["vad"] = silero.VAD.load()
-    logger.info("Prewarm completed")
 
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
-    
-    logger.info("Starting CommerceAgent entrypoint...")
 
-    try:
-        agent = CommerceAgent()
+    host_agent = ImprovAgent()
 
-        session = AgentSession(
-            stt=deepgram.STT(model="nova-3"),
-            llm=google.LLM(model="gemini-2.5-flash"),
-            tts=murf.TTS(
-                voice=DEFAULT_VOICE,
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True,
-            ),
-            turn_detection=MultilingualModel(),
-            vad=ctx.proc.userdata["vad"],
-            preemptive_generation=True,
-        )
+    session = AgentSession(
+        stt=deepgram.STT(model="nova-3"),
+        llm=google.LLM(model="gemini-2.5-flash"),
+        tts=murf.TTS(
+            voice=DEFAULT_VOICE,
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+        ),
+        turn_detection=MultilingualModel(),
+        vad=ctx.proc.userdata["vad"],
+        preemptive_generation=True,
+    )
 
-        usage_collector = metrics.UsageCollector()
+    usage_collector = metrics.UsageCollector()
 
-        @session.on("metrics_collected")
-        def _on_metrics(ev: MetricsCollectedEvent):
-            metrics.log_metrics(ev.metrics)
-            usage_collector.collect(ev.metrics)
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
 
-        async def log_usage():
-            summary = usage_collector.get_summary()
-            logger.info(f"Usage: {summary}")
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info(f"Usage: {summary}")
 
-        ctx.add_shutdown_callback(log_usage)
+    ctx.add_shutdown_callback(log_usage)
 
-        await session.start(
-            agent=agent,
-            room=ctx.room,
-            room_input_options=RoomInputOptions(
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
-        )
+    await session.start(
+        agent=host_agent,
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
+        ),
+    )
 
-        logger.info("Day 9 CommerceAgent ready and connected!")
+    logger.info("Improv Battle host ready – single-player mode.")
 
-        await ctx.connect()
-        
-    except Exception as e:
-        logger.error(f"Failed to start agent: {e}")
-        raise
+    await ctx.connect()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    logger.info("Starting Commerce Agent application...")
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
