@@ -1,0 +1,45 @@
+[
+  {
+    "id": "ORD-1764495174",
+    "items": [
+      {
+        "product_id": "acc-002",
+        "name": "Black Baseball Cap",
+        "quantity": 1,
+        "unit_price": 699
+      }
+    ],
+    "total": 699,
+    "currency": "INR",
+    "created_at": "2025-11-30T09:32:54.643821+00:00"
+  },
+  {
+    "id": "ORD-1764495198",
+    "items": [
+      {
+        "product_id": "hood-002",
+        "name": "Olive Green Hoodie",
+        "quantity": 2,
+        "unit_price": 1399
+      }
+    ],
+    "total": 2798,
+    "currency": "INR",
+    "created_at": "2025-11-30T09:33:18.414145+00:00"
+  },
+  {
+    "id": "ORD-1764495242",
+    "items": [
+      {
+        "product_id": "hood-001",
+        "name": "Classic Black Hoodie",
+        "quantity": 3,
+        "unit_price": 1599,
+        "size": "L"
+      }
+    ],
+    "total": 4797,
+    "currency": "INR",
+    "created_at": "2025-11-30T09:34:02.893646+00:00"
+  }
+]

@@ -137,8 +137,6 @@ chmod +x start_app.sh
 ./start_app.sh
 ```
 
-This will start:
-
 - LiveKit Server (in dev mode)
 - Backend agent (listening for connections)
 - Frontend app (at http://localhost:3000)

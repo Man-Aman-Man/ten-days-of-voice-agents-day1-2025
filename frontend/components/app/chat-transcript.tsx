@@ -45,7 +45,7 @@ function GmBadge() {
 
 function PlayerBadge() {
   return (
-    <div className="h-9 w-9 rounded-full flex items-center justify-center bg-emerald-400 text-slate-900 font-bold shadow-sm">
+    <div className="h-9 w-9 rounded-full flex items-center justify-center bg-emerald-400 text-slate-900 font-bold shadow-sm text-[11px]">
       YOU
     </div>
   );
@@ -98,7 +98,7 @@ export function ChatTranscript({
               GM
             </div>
             <div>
-              <div className="text-sm font-semibold text-sky-100">Zombie Apocalypse</div>
+              <div className="text-sm font-semibold text-sky-100">Shopping Assistant</div>
               <div className="text-[11px] text-slate-400">Realtime voice transcript</div>
             </div>
           </div>

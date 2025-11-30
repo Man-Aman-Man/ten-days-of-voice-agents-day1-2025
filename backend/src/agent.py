@@ -1,8 +1,8 @@
-# backend/src/agent.py
 import logging
 import os
+import json
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -25,152 +25,524 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-# Config
 DEFAULT_VOICE = "en-US-matthew"
-MAX_TURNS = 14  # soft target for a mini-arc
 
-# System prompt for a zombie-wasteland, cure-hunt adventure
-PRELUDE = (
-    "You are a Game Master running a short, single-player survival adventure called "
-    "\"The Last Cure in Greyford\".\n\n"
-    "UNIVERSE & TONE:\n"
-    "- Setting: a ruined city named Greyford after a fast-moving zombie outbreak. "
-    "Collapsed streets, abandoned cars, broken hospitals, and scattered survivor notes.\n"
-    "- Tone: suspenseful, cinematic, but still clear and easy to follow. "
-    "Use short, vivid sentences the player can understand quickly.\n\n"
-    "ROLE & RULES:\n"
-    "- You are the GM. You describe the world and ask the player what they do.\n"
-    "- Always end each spoken message with a short question inviting action, such as "
-    "'What do you do?' or 'What do you do next?'.\n"
-    "- Never choose the player's actions for them. Only describe consequences.\n"
-    "- Keep language simple: short sentences, clear options (move, hide, search, climb, talk, check, open, run).\n"
-    "- Remember the player's recent choices so the story continues logically: what they picked up, "
-    "who they met, where they went.\n"
-    "- The player is trying to reach an old hospital lab rumoured to contain data for a possible cure.\n"
-    "- If the player asks to restart, call the tool `restart_adventure` to reset state. "
-    "If they say they're done or want to stop, give a short, kind summary and farewell.\n\n"
-    "SESSION GOAL:\n"
-    "- Run a short mini-quest (about 8–14 exchanges): travel through parts of Greyford, "
-    "face at least one serious threat, reach the hospital or a key clue about the cure, "
-    "and end with a small but satisfying outcome (hopeful or bittersweet).\n"
-    "- Keep the pacing tight: some quiet tension, some sudden danger, and at least one important decision.\n"
-)
+# Get the current script's directory more reliably
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ORDERS_DIR = os.path.join(BASE_DIR, "orders")
+ORDERS_FILE = os.path.join(ORDERS_DIR, "day9_orders.json")
+
+# Ensure orders directory exists at module load
+os.makedirs(ORDERS_DIR, exist_ok=True)
+
+# -------------------------------------------------------------------
+#  CATALOG (in-code, ACP-style structure)
+# -------------------------------------------------------------------
+
+CATALOG: List[Dict[str, Any]] = [
+    {
+        "id": "mug-001",
+        "name": "Stoneware Coffee Mug",
+        "description": "Sturdy stoneware coffee mug with a matte finish.",
+        "price": 799,
+        "currency": "INR",
+        "category": "mug",
+        "color": "white",
+    },
+    {
+        "id": "mug-002",
+        "name": "Blue Ceramic Mug",
+        "description": "Glossy blue ceramic mug, 350ml.",
+        "price": 599,
+        "currency": "INR",
+        "category": "mug",
+        "color": "blue",
+    },
+    {
+        "id": "tee-001",
+        "name": "Minimal Logo T-Shirt",
+        "description": "Black cotton tee with a small chest logo.",
+        "price": 899,
+        "currency": "INR",
+        "category": "tshirt",
+        "color": "black",
+        "sizes": ["S", "M", "L", "XL"],
+    },
+    {
+        "id": "tee-002",
+        "name": "Graphic T-Shirt",
+        "description": "White t-shirt with a subtle abstract graphic.",
+        "price": 1099,
+        "currency": "INR",
+        "category": "tshirt",
+        "color": "white",
+        "sizes": ["M", "L"],
+    },
+    {
+        "id": "hood-001",
+        "name": "Classic Black Hoodie",
+        "description": "Soft fleece hoodie with kangaroo pocket.",
+        "price": 1599,
+        "currency": "INR",
+        "category": "hoodie",
+        "color": "black",
+        "sizes": ["M", "L", "XL"],
+    },
+    {
+        "id": "hood-002",
+        "name": "Olive Green Hoodie",
+        "description": "Lightweight hoodie, perfect for layering.",
+        "price": 1399,
+        "currency": "INR",
+        "category": "hoodie",
+        "color": "green",
+        "sizes": ["S", "M", "L"],
+    },
+    {
+        "id": "acc-001",
+        "name": "Canvas Tote Bag",
+        "description": "Reusable off-white canvas tote bag.",
+        "price": 499,
+        "currency": "INR",
+        "category": "accessory",
+        "color": "beige",
+    },
+    {
+        "id": "acc-002",
+        "name": "Black Baseball Cap",
+        "description": "Adjustable cap with curved visor.",
+        "price": 699,
+        "currency": "INR",
+        "category": "accessory",
+        "color": "black",
+    },
+]
+
+ORDERS: List[Dict[str, Any]] = []
 
 
-class ZombieCureAgent(Agent):
+# -------------------------------------------------------------------
+#  Helpers: load/save orders, normalize categories, filter products
+# -------------------------------------------------------------------
+
+def _ensure_orders_loaded() -> None:
+    """Load existing orders from JSON (if any) into ORDERS."""
+    global ORDERS
+    try:
+        logger.info(f"Looking for orders file at: {ORDERS_FILE}")
+        logger.info(f"Orders directory exists: {os.path.exists(ORDERS_DIR)}")
+        
+        if not os.path.exists(ORDERS_FILE):
+            logger.info("No existing orders file found, starting fresh")
+            ORDERS = []
+            # Create initial empty orders file
+            _persist_orders()
+            return
+            
+        with open(ORDERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        if isinstance(data, list):
+            ORDERS = data
+            logger.info("Successfully loaded %d existing orders", len(ORDERS))
+        else:
+            logger.warning("Orders file contains invalid data (not a list), starting fresh")
+            ORDERS = []
+            _persist_orders()
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in orders file: {e}")
+        logger.info("Creating fresh orders file due to JSON error")
+        ORDERS = []
+        _persist_orders()
+    except Exception as e:
+        logger.error(f"Unexpected error loading orders: {e}")
+        logger.info("Starting with empty orders due to error")
+        ORDERS = []
+        # Don't try to persist here as it might cause infinite recursion
+
+
+def _persist_orders() -> None:
+    """Write ORDERS list to JSON atomically."""
+    try:
+        logger.info(f"Persisting {len(ORDERS)} orders to {ORDERS_FILE}")
+        
+        # Ensure directory exists
+        os.makedirs(ORDERS_DIR, exist_ok=True)
+        logger.info(f"Orders directory ensured: {os.path.exists(ORDERS_DIR)}")
+        
+        tmp = ORDERS_FILE + ".tmp"
+        
+        # Write to temporary file first
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(ORDERS, f, indent=2, ensure_ascii=False, default=str)
+        
+        # Atomic replace
+        if os.path.exists(ORDERS_FILE):
+            os.remove(ORDERS_FILE)
+        os.rename(tmp, ORDERS_FILE)
+        
+        logger.info(f"Successfully persisted orders. File exists: {os.path.exists(ORDERS_FILE)}")
+        
+    except Exception as e:
+        logger.error(f"Failed to persist orders: {e}")
+        # Don't raise, just log - we don't want to break the agent
+
+
+def _normalize_category(raw: Optional[str]) -> Optional[str]:
+    """Map 'hoodies', 't-shirts', 'tees', 'mugs', etc. into stable keys."""
+    if not raw:
+        return None
+        
+    s = raw.strip().lower()
+    s = s.replace("-", "").replace(" ", "")
+    if s.endswith("s"):
+        s = s[:-1]
+
+    mapping = {
+        "mug": "mug",
+        "coffee": "mug",
+        "coffeemug": "mug",
+        "cup": "mug",
+        "tshirt": "tshirt",
+        "tee": "tshirt",
+        "shirt": "tshirt",
+        "hoodie": "hoodie",
+        "hood": "hoodie",
+        "sweatshirt": "hoodie",
+        "jumper": "hoodie",
+        "accessory": "accessory",
+        "cap": "accessory",
+        "hat": "accessory",
+        "bag": "accessory",
+        "tote": "accessory",
+    }
+    return mapping.get(s, s)
+
+
+def _filter_products(
+    category: Optional[str] = None,
+    max_price: Optional[int] = None,
+    color: Optional[str] = None,
+    text_query: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Lenient filtering:
+      - category / color are normalized and treated as soft filters.
+      - text_query checks name+description.
+      - if filters yield 0, we fall back to full catalog.
+    """
+    try:
+        cat_norm = _normalize_category(category)
+        color_norm = color.strip().lower() if color else None
+        text_norm = text_query.strip().lower() if text_query else None
+
+        results: List[Dict[str, Any]] = []
+
+        for p in CATALOG:
+            # max price is hard filter
+            if max_price is not None and p.get("price", 0) > max_price:
+                continue
+
+            pc = _normalize_category(p.get("category"))
+            if cat_norm and pc != cat_norm:
+                continue
+
+            if color_norm:
+                pc_color = str(p.get("color", "")).lower()
+                if color_norm not in pc_color:
+                    continue
+
+            if text_norm:
+                blob = (p.get("name", "") + " " + p.get("description", "")).lower()
+                if text_norm not in blob:
+                    continue
+
+            results.append(p)
+
+        # If filters applied but nothing found, fall back to entire catalog
+        if not results and (cat_norm or max_price is not None or color_norm or text_norm):
+            logger.info(
+                "Filters matched no products (category=%r, max_price=%r, color=%r, text=%r). "
+                "Falling back to full catalog.",
+                cat_norm,
+                max_price,
+                color_norm,
+                text_norm,
+            )
+            return CATALOG.copy()
+
+        # No filters means return all
+        if not results and not (cat_norm or max_price is not None or color_norm or text_norm):
+            return CATALOG.copy()
+
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error filtering products: {e}")
+        # Always return the full catalog as fallback
+        return CATALOG.copy()
+
+
+def _find_product_by_id(pid: str) -> Optional[Dict[str, Any]]:
+    try:
+        for p in CATALOG:
+            if p.get("id") == pid:
+                return p
+        return None
+    except Exception as e:
+        logger.error(f"Error finding product by ID {pid}: {e}")
+        return None
+
+
+# -------------------------------------------------------------------
+#  Agent
+# -------------------------------------------------------------------
+
+class CommerceAgent(Agent):
+    """
+    Voice shopping assistant with ACP-style separation:
+    - Conversation handled by LLM + voice.
+    - Catalog + orders handled by Python tools.
+    """
+
     def __init__(self) -> None:
-        super().__init__(instructions=PRELUDE)
-        # simple local story memory (LLM mainly relies on chat history, but tools can inspect this)
-        self.story_history: List[Dict[str, str]] = []
-        self.turn_count: int = 0
-        self.ended: bool = False
-        self.seed = self._get_seed()
+        # Initialize orders before calling parent constructor
+        logger.info("Initializing CommerceAgent...")
+        _ensure_orders_loaded()
+        
+        super().__init__(
+            instructions="""
+You are a calm, reliable voice shopping assistant for a fictional online store.
 
-    def _get_seed(self) -> Dict[str, str]:
-        """Initial world seed values the LLM can implicitly rely on."""
-        return {
-            "city": "Greyford",
-            "goal": "reach the old St. Helena Hospital lab",
-            "rumor": "there might be data for a cure stored in a locked server room",
-            "starting_place": "a half-collapsed safehouse above an empty convenience store",
-        }
+You follow an Agentic Commerce style:
+- You handle conversation in natural language.
+- You use tools to browse the catalog and create orders.
+- You NEVER invent products, ids, or prices. Only use tool results.
 
-    def _append_history(self, who: str, text: str) -> None:
-        """Optional: maintain a short internal trail of recent lines."""
-        self.story_history.append({"who": who, "text": text})
-        if len(self.story_history) > 80:
-            self.story_history = self.story_history[-80:]
+CATALOG:
+- Products include mugs, t-shirts, hoodies, and accessories.
+- Each product has id, name, price, currency, category, color, and sometimes sizes.
 
-    def _session_summary(self) -> str:
-        """Short plain-text recap of the last few lines."""
-        lines = []
-        for entry in self.story_history[-8:]:
-            who = "GM" if entry["who"] == "gm" else "You"
-            lines.append(f"{who}: {entry['text']}")
-        return "\n".join(lines)
+WHEN USER WANTS TO BROWSE OR CHECK AVAILABILITY:
+- If the user asks things like:
+  - "Any hoodies available?"
+  - "Show me mugs."
+  - "Do you have a blue mug?"
+  - "T-shirts under 1000 rupees."
+  - "What products do you have?"
+  you MUST call the tool `list_products` with simple filters:
+    - category: a short word like "hoodie", "mug", "tshirt", "accessory" if you can infer it.
+    - max_price: integer if they mention a budget.
+    - color: if they mention color.
+    - text_query: if they say something like "coffee mug" or "minimal logo".
+- After calling `list_products`, ALWAYS read out a few items with numbering:
+  Example:
+    "I found 2 hoodies. (1) Classic Black Hoodie for 1599 rupees. (2) Olive Green Hoodie for 1399 rupees."
+- If `count` is 0, you can say "I could not find an exact match, but here are some other items in the store"
+  and then call `list_products` again with fewer or no filters.
+- Never claim the store is completely empty, because the catalog is always available.
 
-    # Tools available to the LLM
+WHEN USER WANTS TO BUY:
+- If the user says things like:
+  - "I'll buy the second hoodie."
+  - "Get me that blue mug."
+  - "Buy the first t-shirt in size M."
+- Use recent tool results and your own reasoning to pick the product id.
+- Then call `create_order` with:
+    product_id: chosen product id
+    quantity: default 1 unless they clearly say 2 or more
+    size: pass a size like "S", "M", "L", "XL" if the product has sizes and the user mentions one.
+- After the tool returns, confirm:
+  - product name
+  - size (if any)
+  - quantity
+  - total price in rupees
+  - order id
+
+LAST ORDER:
+- If the user asks "What did I just buy?" or "What was my last order?",
+  call `get_last_order` and summarize the latest order.
+
+STYLE:
+- Short, clear, friendly.
+- Mention prices in "rupees" or "INR".
+- This is a demo: never talk about real payment, delivery address, or refunds.
+
+ERROR HANDLING:
+- If any tool fails, just apologize and ask the user to try again.
+- Never mention technical errors to the user.
+"""
+        )
+        logger.info("CommerceAgent initialized successfully")
+
+    # -------------------- Tools --------------------
 
     @function_tool
-    async def restart_adventure(self, context: RunContext) -> Dict[str, Any]:
+    async def list_products(
+        self,
+        context: RunContext,
+        category: Optional[str] = None,
+        max_price: Optional[int] = None,
+        color: Optional[str] = None,
+        text_query: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Reset the zombie adventure to the original start state.
-
-        Use this when the player says things like:
-        'restart', 'start again', or 'new story'.
+        Browse the product catalog using lenient filters.
         """
-        self.story_history = []
-        self.turn_count = 0
-        self.ended = False
-        self.seed = self._get_seed()
-        return {
-            "ok": True,
-            "message": "Zombie adventure restarted. You are back at the start.",
-            "seed": self.seed,
-        }
+        try:
+            products = _filter_products(
+                category=category,
+                max_price=max_price,
+                color=color,
+                text_query=text_query,
+            )
+            logger.info(
+                "list_products called with category=%r, max_price=%r, color=%r, text=%r -> %d results",
+                category,
+                max_price,
+                color,
+                text_query,
+                len(products),
+            )
+            return {"count": len(products), "products": products}
+        except Exception as e:
+            logger.error(f"Error in list_products: {e}")
+            # Return empty result instead of failing
+            return {"count": 0, "products": []}
 
     @function_tool
-    async def get_session_summary(self, context: RunContext) -> Dict[str, Any]:
+    async def create_order(
+        self,
+        context: RunContext,
+        product_id: str,
+        quantity: int = 1,
+        size: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Return a short recap of the recent conversation.
-
-        The GM can call this to remind the player what has happened so far,
-        especially if they ask 'what happened before' or 'remind me'.
+        Create an order for a single product.
         """
-        return {
-            "summary": self._session_summary(),
-            "turns": self.turn_count,
-            "ended": self.ended,
-        }
+        try:
+            product = _find_product_by_id(product_id)
+            if product is None:
+                logger.warning("create_order called with unknown product_id=%r", product_id)
+                return {"ok": False, "error": f"Unknown product id {product_id!r}"}
 
+            quantity = max(1, quantity)
+            order_id = f"ORD-{int(datetime.now(timezone.utc).timestamp())}"
+            line_total = product["price"] * quantity
+
+            item: Dict[str, Any] = {
+                "product_id": product["id"],
+                "name": product["name"],
+                "quantity": quantity,
+                "unit_price": product["price"],
+            }
+            if size:
+                item["size"] = size
+
+            order: Dict[str, Any] = {
+                "id": order_id,
+                "items": [item],
+                "total": line_total,
+                "currency": product.get("currency", "INR"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            ORDERS.append(order)
+            _persist_orders()
+
+            logger.info(
+                "Created order %s for product %s x%d (size=%r, total=%d)",
+                order_id,
+                product["id"],
+                quantity,
+                size,
+                line_total,
+            )
+
+            return {"ok": True, "order": order}
+            
+        except Exception as e:
+            logger.error(f"Error in create_order: {e}")
+            return {"ok": False, "error": f"Failed to create order: {str(e)}"}
+
+    @function_tool
+    async def get_last_order(self, context: RunContext) -> Dict[str, Any]:
+        """
+        Return the most recent order placed in this system.
+        """
+        try:
+            if not ORDERS:
+                return {"ok": False, "message": "No orders have been placed yet."}
+            return {"ok": True, "order": ORDERS[-1]}
+        except Exception as e:
+            logger.error(f"Error in get_last_order: {e}")
+            return {"ok": False, "message": "Error retrieving last order"}
+
+
+# -------------------------------------------------------------------
+#  LiveKit wiring
+# -------------------------------------------------------------------
 
 def prewarm(proc: JobProcess):
+    logger.info("Prewarming agent...")
     proc.userdata["vad"] = silero.VAD.load()
+    logger.info("Prewarm completed")
 
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
-    gm = ZombieCureAgent()
+    
+    logger.info("Starting CommerceAgent entrypoint...")
 
-    session = AgentSession(
-        stt=deepgram.STT(model="nova-3"),
-        llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(
-            voice=DEFAULT_VOICE,
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-            text_pacing=True,
-        ),
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
-        preemptive_generation=True,
-    )
+    try:
+        agent = CommerceAgent()
 
-    usage_collector = metrics.UsageCollector()
+        session = AgentSession(
+            stt=deepgram.STT(model="nova-3"),
+            llm=google.LLM(model="gemini-2.5-flash"),
+            tts=murf.TTS(
+                voice=DEFAULT_VOICE,
+                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+                text_pacing=True,
+            ),
+            turn_detection=MultilingualModel(),
+            vad=ctx.proc.userdata["vad"],
+            preemptive_generation=True,
+        )
 
-    @session.on("metrics_collected")
-    def _on_metrics(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
+        usage_collector = metrics.UsageCollector()
 
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        @session.on("metrics_collected")
+        def _on_metrics(ev: MetricsCollectedEvent):
+            metrics.log_metrics(ev.metrics)
+            usage_collector.collect(ev.metrics)
 
-    ctx.add_shutdown_callback(log_usage)
+        async def log_usage():
+            summary = usage_collector.get_summary()
+            logger.info(f"Usage: {summary}")
 
-    # Start the agent session
-    await session.start(
-        agent=gm,
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
+        ctx.add_shutdown_callback(log_usage)
 
-    logger.info("Zombie cure adventure GM ready — Greyford wasteland")
+        await session.start(
+            agent=agent,
+            room=ctx.room,
+            room_input_options=RoomInputOptions(
+                noise_cancellation=noise_cancellation.BVC(),
+            ),
+        )
 
-    await ctx.connect()
+        logger.info("Day 9 CommerceAgent ready and connected!")
+
+        await ctx.connect()
+        
+    except Exception as e:
+        logger.error(f"Failed to start agent: {e}")
+        raise
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Starting Commerce Agent application...")
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
