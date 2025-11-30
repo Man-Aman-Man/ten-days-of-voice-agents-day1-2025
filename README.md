@@ -1,212 +1,278 @@
-# AI Voice Agents Challenge - Starter Repository
+# Day 10 – Voice Improv Battle
 
-Welcome to the **AI Voice Agents Challenge** by [murf.ai](https://murf.ai)!
+This project implements a fully voice-driven improv game show powered by **LiveKit Agents**, **Gemini 2.5 Flash**, **Deepgram Nova-3**, and **Murf Falcon TTS**.
 
-## About the Challenge
-
-We just launched **Murf Falcon** – the consistently fastest TTS API, and you're going to be among the first to test it out in ways never thought before!
-
-**Build 10 AI Voice Agents over the course of 10 Days** along with help from our devs and the community champs, and win rewards!
-
-### How It Works
-
-- One task to be provided everyday along with a GitHub repo for reference
-- Build a voice agent with specific personas and skills
-- Post on GitHub and share with the world on LinkedIn!
-
-## Repository Structure
-
-This is a **monorepo** that contains both the backend and frontend for building voice agent applications. It's designed to be your starting point for each day's challenge task.
-
-```
-falcon-tdova-nov25-livekit/
-├── backend/          # LiveKit Agents backend with Murf Falcon TTS
-├── frontend/         # React/Next.js frontend for voice interaction
-├── start_app.sh      # Convenience script to start all services
-└── README.md         # This file
-```
-
-### Backend
-
-The backend is based on [LiveKit's agent-starter-python](https://github.com/livekit-examples/agent-starter-python) with modifications to integrate **Murf Falcon TTS** for ultra-fast, high-quality voice synthesis.
-
-**Features:**
-
-- Complete voice AI agent framework using LiveKit Agents
-- Murf Falcon TTS integration for fastest text-to-speech
-- LiveKit Turn Detector for contextually-aware speaker detection
-- Background voice cancellation
-- Integrated metrics and logging
-- Complete test suite with evaluation framework
-- Production-ready Dockerfile
-
-[→ Backend Documentation](./backend/README.md)
-
-### Frontend
-
-The frontend is based on [LiveKit's agent-starter-react](https://github.com/livekit-examples/agent-starter-react), providing a modern, beautiful UI for interacting with your voice agents.
-
-**Features:**
-
-- Real-time voice interaction with LiveKit Agents
-- Camera video streaming support
-- Screen sharing capabilities
-- Audio visualization and level monitoring
-- Light/dark theme switching
-- Highly customizable branding and UI
-
-[→ Frontend Documentation](./frontend/README.md)
-
-## Quick Start
-
-### Prerequisites
-
-Make sure you have the following installed:
-
-- Python 3.9+ with [uv](https://docs.astral.sh/uv/) package manager
-- Node.js 18+ with pnpm
-- [LiveKit CLI](https://docs.livekit.io/home/cli/cli-setup) (optional but recommended)
-- [LiveKit Server](https://docs.livekit.io/home/self-hosting/local/) for local development
-
-### 1. Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd falcon-tdova-nov25-livekit
-```
-
-### 2. Backend Setup
-
-```bash
-cd backend
-
-# Install dependencies
-uv sync
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with your credentials:
-# - LIVEKIT_URL
-# - LIVEKIT_API_KEY
-# - LIVEKIT_API_SECRET
-# - MURF_API_KEY (for Falcon TTS)
-# - GOOGLE_API_KEY (for Gemini LLM)
-# - DEEPGRAM_API_KEY (for Deepgram STT)
-
-# Download required models
-uv run python src/agent.py download-files
-```
-
-For LiveKit Cloud users, you can automatically populate credentials:
-
-```bash
-lk cloud auth
-lk app env -w -d .env.local
-```
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-pnpm install
-
-# Copy environment file and configure
-cp .env.example .env.local
-
-# Edit .env.local with the same LiveKit credentials
-```
-
-### 4. Run the Application
-
-#### Install livekit server
-
-```bash
-brew install livekit
-```
-
-You have two options:
-
-#### Option A: Use the convenience script (runs everything)
-
-```bash
-# From the root directory
-chmod +x start_app.sh
-./start_app.sh
-```
-
-- LiveKit Server (in dev mode)
-- Backend agent (listening for connections)
-- Frontend app (at http://localhost:3000)
-
-#### Option B: Run services individually
-
-```bash
-# Terminal 1 - LiveKit Server
-livekit-server --dev
-
-# Terminal 2 - Backend Agent
-cd backend
-uv run python src/agent.py dev
-
-# Terminal 3 - Frontend
-cd frontend
-pnpm dev
-```
-
-Then open http://localhost:3000 in your browser!
-
-## Daily Challenge Tasks
-
-Each day, you'll receive a new task that builds upon your voice agent. The tasks will help you:
-
-- Implement different personas and conversation styles
-- Add custom tools and capabilities
-- Integrate with external APIs
-- Build domain-specific agents (customer service, tutoring, etc.)
-- Optimize performance and user experience
-
-**Stay tuned for daily task announcements!**
-
-## Documentation & Resources
-
-- [Murf Falcon TTS Documentation](https://murf.ai/api/docs/text-to-speech/streaming)
-- [LiveKit Agents Documentation](https://docs.livekit.io/agents)
-- [Original Backend Template](https://github.com/livekit-examples/agent-starter-python)
-- [Original Frontend Template](https://github.com/livekit-examples/agent-starter-react)
-
-## Testing
-
-The backend includes a comprehensive test suite:
-
-```bash
-cd backend
-uv run pytest
-```
-
-Learn more about testing voice agents in the [LiveKit testing documentation](https://docs.livekit.io/agents/build/testing/).
-
-## Contributing & Community
-
-This is a challenge repository, but we encourage collaboration and knowledge sharing!
-
-- Share your solutions and learnings on GitHub
-- Post about your progress on LinkedIn
-- Join the [LiveKit Community Slack](https://livekit.io/join-slack)
-- Connect with other challenge participants
-
-## License
-
-This project is based on MIT-licensed templates from LiveKit and includes integration with Murf Falcon. See individual LICENSE files in backend and frontend directories for details.
-
-## Have Fun!
-
-Remember, the goal is to learn, experiment, and build amazing voice AI agents. Don't hesitate to be creative and push the boundaries of what's possible with Murf Falcon and LiveKit!
-
-Good luck with the challenge!
+The agent becomes a high-energy game show host for a fictional show called **“Improv Battle”**, guiding the player through multiple improv scenarios, reacting to their performance, and summarizing the results at the end.
 
 ---
 
-Built for the AI Voice Agents Challenge by murf.ai
+## 🎮 Concept
+
+- Single-player improv game
+- Player joins from the browser
+- AI is the **host** of “Improv Battle”
+- Each round:
+  1. Host sets a scene
+  2. Player improvises in character
+  3. Host reacts (praise / neutral / mild critique)
+  4. Game advances to the next round
+- After a few rounds, the host gives a closing summary and ends the show
+
+This is not a quiz or trivia game — it’s all about performance and creativity.
+
+---
+
+## 🧠 Backend: `ImprovAgent`
+
+### File: `backend/src/agent.py`
+
+The core logic is inside a custom agent class:
+
+```python
+class ImprovAgent(Agent):
+    ...
+```
+
+### Improv State
+
+The agent maintains a simple in-memory game state per session:
+
+```python
+improv_state = {
+    "player_name": None,
+    "current_round": 0,
+    "max_rounds": 3,
+    "rounds": [],  # each: {"round", "scenario", "host_reaction", "tone", "timestamp"}
+    "phase": "intro",  # "intro" | "awaiting_improv" | "reacting" | "done"
+}
+```
+
+- `player_name`: what the host calls the player (e.g., “Aman”)
+- `current_round`: zero-based index of the current round
+- `max_rounds`: total number of rounds (default 3)
+- `rounds`: log of each scenario + reaction
+- `phase`:
+  - `intro`: host is welcoming and explaining rules
+  - `awaiting_improv`: player should perform the scene
+  - `reacting`: host is reacting to the previous scene
+  - `done`: game finished
+
+### Tools Exposed to the LLM
+
+The agent exposes multiple tools so the LLM can explicitly manage game flow:
+
+#### `get_improv_state`
+
+Returns the current `improv_state` so the host can decide what to do next.
+
+```python
+@function_tool
+async def get_improv_state(self, context: RunContext) -> Dict[str, Any]:
+    return self.improv_state
+```
+
+#### `set_player_name`
+
+Sets the player’s name based on what they say (“Call me Aman”, etc.).
+
+```python
+@function_tool
+async def set_player_name(self, context: RunContext, name: str) -> Dict[str, Any]:
+    ...
+```
+
+#### `start_next_round`
+
+Advances to the next improv round and returns the scenario text.
+
+```python
+@function_tool
+async def start_next_round(self, context: RunContext) -> Dict[str, Any]:
+    ...
+```
+
+If no rounds remain, it marks the game as done.
+
+#### `record_reaction`
+
+After the player finishes a scene, the host calls this tool with a reaction and tone:
+
+- `host_reaction`: what the host thought
+- `tone`: `"positive"`, `"neutral"`, or `"critical"`
+
+The tool:
+
+- Appends a record to `rounds`
+- Increments `current_round`
+- Updates `phase`
+
+#### `end_show`
+
+Marks the game as finished and stores a final summary:
+
+```python
+@function_tool
+async def end_show(self, context: RunContext, summary: str) -> Dict[str, Any]:
+    ...
+```
+
+Used when all rounds are done or the player says “stop game” / “end show”.
+
+---
+
+## 🎭 Scenarios
+
+A small list of pre-written improv scenarios is defined in code, for example:
+
+```python
+SCENARIOS = [
+    "You are a time-travelling tour guide explaining smartphones to someone from 1820.",
+    "You are a sleepy barista who has to calmly tell a customer that their latte is a portal to another dimension.",
+    "You are a restaurant waiter whose customer's order has literally escaped the kitchen and is running around the dining room.",
+    "You are a customer trying to return a clearly cursed object to a shop owner who refuses to admit it is cursed.",
+    "You are an over-enthusiastic fitness instructor who is secretly terrified of exercise."
+]
+```
+
+The host:
+
+- Announces the scenario
+- Tells the player to “act it out now”
+- Waits for them to improvise
+- Reacts when they say “end scene” or clearly finish
+
+---
+
+## 🗣️ Host Persona (System Prompt)
+
+The system prompt defines:
+
+- Role: TV show host of “Improv Battle”
+- Tone: High-energy, witty, playful, but respectful
+- Behaviour:
+  - Explain rules
+  - Use tools to manage rounds and state
+  - Sometimes be very supportive
+  - Sometimes slightly unimpressed / neutral
+  - Sometimes mildly critical but always constructive
+- Early exit: When user says “stop game” or “end show”, call `end_show` once and close gracefully
+
+The host **never mentions tools or JSON**. It just sounds like a natural game show host.
+
+---
+
+## 🎧 Voice & Realtime Stack
+
+The backend uses your existing Day 1–Day 9 voice stack:
+
+- **STT**: Deepgram `nova-3`
+- **LLM**: Google Gemini `2.5-flash`
+- **TTS**: Murf Falcon (e.g. `en-US-matthew`)
+- **Turn Detection**: `MultilingualModel`
+- **VAD**: Silero
+- **Noise Cancellation**: `noise_cancellation.BVC()`
+
+Configured via:
+
+```python
+session = AgentSession(
+    stt=deepgram.STT(model="nova-3"),
+    llm=google.LLM(model="gemini-2.5-flash"),
+    tts=murf.TTS(...),
+    turn_detection=MultilingualModel(),
+    vad=ctx.proc.userdata["vad"],
+    preemptive_generation=True,
+)
+```
+
+---
+
+## 🖥️ Frontend: Join Screen
+
+**File:** `frontend/components/app/welcome-view.tsx`
+
+The welcome screen:
+
+- Shows the show name (“Improv Battle”)
+- Has a text field for **Name**
+- Button: **“Start Improv Battle”**
+- On click → calls `onStartCall()` (which starts the LiveKit session)
+
+The name is mostly for UX; the backend also learns the name from what the user says (“Call me Aman”) using `set_player_name`.
+
+---
+
+## ▶️ How to Run
+
+### 1. LiveKit Server
+
+Make sure LiveKit server is running (in dev mode):
+
+```bash
+livekit-server --dev
+```
+
+### 2. Backend
+
+From the `backend/` folder:
+
+```bash
+uv sync
+cp .env.example .env.local   # if not already done
+# Fill LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
+# and keys for Murf, Gemini, Deepgram in .env.local
+
+uv run python src/agent.py dev
+```
+
+### 3. Frontend
+
+From the `frontend/` folder:
+
+```bash
+pnpm install
+cp .env.example .env.local   # ensure LIVEKIT_URL etc. are set
+pnpm dev
+```
+
+Then open:
+
+```text
+http://localhost:3000
+```
+
+Enter your name → click **Start Improv Battle** → the host will begin.
+
+---
+
+## 🎙️ Example Things to Say
+
+During the game, try phrases like:
+
+- “Okay, I’m ready. Give me the first scenario.”  
+- (Then improvise in character)  
+- “End scene.”  
+- “Next round.”  
+- “Stop game.” / “End show.”  
+
+The host will:
+
+- Introduce scenes  
+- React to your performance  
+- Track rounds  
+- Give a final summary of your improv style (e.g., strong character work, good absurdity, emotional range, etc.)  
+
+---
+
+## ✅ What’s Done (Primary Goal)
+
+- Single-player browser-based improv game ✅  
+- Strong improv host persona ✅  
+- Multiple scenarios with clear character prompts ✅  
+- State tracking in Python ✅  
+- Tools for_round progression and reactions ✅  
+- Early exit handling ✅  
+- Custom frontend join screen with Name input ✅  
+- Full voice-only interaction loop ✅  
+
+Day 10 of the Murf AI Voice Agent Challenge: **Complete.** 🎉
